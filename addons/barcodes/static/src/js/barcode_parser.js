@@ -193,6 +193,7 @@ var BarcodeParser = Class.extend({
     // - base_code : the barcode with all the encoding parts set to zero; the one put on
     //               the product in the backend
     parse_barcode: function(barcode){
+       
         var parsed_result = {
             encoding: '',
             type:'error',  
@@ -202,6 +203,17 @@ var BarcodeParser = Class.extend({
         };
 
         if (!this.nomenclature) {
+            return parsed_result;
+        }
+
+        if (barcode.toString().length == 10){
+            parsed_result = {
+                encoding: 'rfid',
+                type:'rfid',  
+                code:barcode,
+                base_code: barcode,
+                value: 10,
+            };
             return parsed_result;
         }
 

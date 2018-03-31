@@ -647,10 +647,12 @@
                         Back
                     </span>
                     <h1>Payment</h1>
+                    <!--
                     <span class='button next'>
                         Validate
                         <i class='fa fa-angle-double-right'></i>
                     </span>
+                -->
                 </div>
                 <div class='left-content pc40 touch-scrollable scrollable-y'>
 
@@ -710,6 +712,7 @@
                         Next Order
                         <i class='fa fa-angle-double-right'></i>
                     </span>
+                   
                 </div>
                 <div class="centered-content touch-scrollable">
                     <div class="button print">

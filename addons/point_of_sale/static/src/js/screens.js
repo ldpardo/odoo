@@ -1545,6 +1545,12 @@ var ReceiptScreenWidget = ScreenWidget.extend({
             this.lock_screen(false);
         }
     },
+    
+    finalize: function() {
+        var self = this;
+        var order = this.pos.get_order();
+        order.finalize();    
+    },
     click_next: function() {
         this.pos.get_order().finalize();
     },
@@ -1570,6 +1576,8 @@ var ReceiptScreenWidget = ScreenWidget.extend({
                 self.print();
             }
         });
+       
+        //this.el.querySelector('.cashier_input').addEventListener('keypress',this.rfid_cashier_action);
     },
     render_change: function() {
         this.$('.change-value').html(this.format_currency(this.pos.get_order().get_change()));
@@ -1577,6 +1585,14 @@ var ReceiptScreenWidget = ScreenWidget.extend({
     render_receipt: function() {
         this.$('.pos-receipt-container').html(QWeb.render('PosTicket', this.get_receipt_render_env()));
     },
+    // this method is called when the screen is closed to make place for a new screen. this is a good place
+    // to put your cleanup stuff as it is guaranteed that for each show() there is one and only one close()
+    close: function(){
+        if(this.pos.barcode_reader){
+            this.pos.barcode_reader.reset_action_callbacks();
+        }
+    },
+
 });
 gui.define_screen({name:'receipt', widget: ReceiptScreenWidget});
 
@@ -1874,12 +1890,19 @@ var PaymentScreenWidget = ScreenWidget.extend({
 
     },
     show: function(){
+        var self = this;
         this.pos.get_order().clean_empty_paymentlines();
         this.reset_input();
         this.render_paymentlines();
         this.order_changes();
         window.document.body.addEventListener('keypress',this.keyboard_handler);
         window.document.body.addEventListener('keydown',this.keyboard_keydown_handler);
+        if(this.pos.barcode_reader){
+            this.pos.barcode_reader.reset_action_callbacks();
+            this.pos.barcode_reader.set_action_callback({
+                'rfid': _.bind(self.rfid_cashier_action, self),
+            });
+        }
         this._super();
     },
     hide: function(){
@@ -1983,6 +2006,27 @@ var PaymentScreenWidget = ScreenWidget.extend({
         return true;
     },
 
+     // what happens when a cashier rfid is scanned.
+    // the default behavior is the following : 
+    // - if there's a user with a matching barcode, put it as the active 'cashier', go to cashier mode, and return true
+    // - else : do nothing and return false. You probably want to extend this to show and appropriate error popup... 
+    rfid_cashier_action: function(code){
+        var self = this;
+
+        var users = this.pos.users;
+        for(var i = 0, len = users.length; i < len; i++){
+            if(users[i].barcode === code.code){
+                this.pos.set_cashier(users[i]);
+                this.chrome.widget.username.renderElement();
+                this.finalize_validation();
+                
+                return true;
+            }
+        }
+        this.barcode_error_action(code);
+        return false;
+    },
+
     finalize_validation: function() {
         var self = this;
         var order = this.pos.get_order();
@@ -1990,7 +2034,7 @@ var PaymentScreenWidget = ScreenWidget.extend({
         if (order.is_paid_with_cash() && this.pos.config.iface_cashdrawer) { 
 
                 this.pos.proxy.open_cashbox();
-        }
+        } 
 
         order.initialize_validation_date();
 
@@ -2040,6 +2084,7 @@ var PaymentScreenWidget = ScreenWidget.extend({
     // Check if the order is paid, then sends it to the backend,
     // and complete the sale process
     validate_order: function(force_validation) {
+        this.gui.show_screen('receipt');
         if (this.order_is_valid(force_validation)) {
             this.finalize_validation();
         }

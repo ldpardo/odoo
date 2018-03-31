@@ -495,6 +495,7 @@ var BarcodeReader = core.Class.extend({
         'product',
         'cashier',
         'client',
+        'rfid',
     ],
 
     init: function(attributes){
@@ -565,6 +566,7 @@ var BarcodeReader = core.Class.extend({
             return;
         }
         var parsed_result = this.barcode_parser.parse_barcode(code);
+
         if (this.action_callback[parsed_result.type]) {
             this.action_callback[parsed_result.type](parsed_result);
         } else if (this.action_callback.error) {
