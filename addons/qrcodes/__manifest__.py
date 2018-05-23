@@ -20,11 +20,11 @@
     'version': '0.1',
 
     # any module necessary for this one to work correctly
-    'depends': ['base'],
+    'depends': ['base', 'product', 'pos_sale'],
 
     # always loaded
     'data': [
-        # 'security/ir.model.access.csv',
+        'security/ir.model.access.csv',
         'views/views.xml',
         'views/templates.xml',
     ],
@@ -32,4 +32,6 @@
     'demo': [
         'demo/demo.xml',
     ],
+    "installable": True,
+    "auto_install": True,
 }

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
-
+from time import time
 from collections import Counter
 
 from odoo import api, fields, models, _
@@ -395,7 +395,8 @@ class StockMoveLine(models.Model):
                         continue
 
                     if not ml.lot_id:
-                        raise UserError(_('You need to supply a lot/serial number for %s.') % ml.product_id.name)
+                        ml.lot_name = repr(time())
+                        #raise UserError(_('You need to supply a lot/serial number for %s.') % ml.product_id.name)
             elif qty_done_float_compared < 0:
                 raise UserError(_('No negative quantities allowed'))
             else:

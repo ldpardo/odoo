@@ -13,7 +13,6 @@ from odoo.exceptions import UserError
 from odoo.addons.stock.models.stock_move import PROCUREMENT_PRIORITIES
 from operator import itemgetter
 
-
 class PickingType(models.Model):
     _name = "stock.picking.type"
     _description = "The operation type determines the picking view"
@@ -716,7 +715,8 @@ class Picking(models.Model):
                 product = line.product_id
                 if product and product.tracking != 'none':
                     if not line.lot_name and not line.lot_id:
-                        raise UserError(_('You need to supply a lot/serial number for %s.') % product.display_name)
+                        line.lot_name = repr(time.time())
+                        #raise UserError(_('You need to supply a lot/serial number for %s.') % product.display_name)
                     elif line.qty_done == 0:
                         raise UserError(_('You cannot validate a transfer if you have not processed any quantity for %s.') % product.display_name)
 
