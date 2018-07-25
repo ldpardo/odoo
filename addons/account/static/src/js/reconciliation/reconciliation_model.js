@@ -517,7 +517,6 @@ var StatementModel = BasicModel.extend({
     },
     /**
      * Force the partial reconciliation to display the reconciliate button.
-     * This method should only  be called when there is onely one proposition.
      *
      * @param {string} handle
      * @returns {Deferred}
@@ -527,14 +526,17 @@ var StatementModel = BasicModel.extend({
 
         // Retrieve the toggle proposition
         var selected;
-        _.each(line.reconciliation_proposition, function (prop) {
+        var targetLineAmount = line.st_line.amount;
+        line.reconciliation_proposition.every(function (prop) {
             if (!prop.invalid) {
-                if (((line.balance.amount < 0 || !line.partial_reconcile) && prop.amount > 0 && line.st_line.amount > 0 && line.st_line.amount < prop.amount) ||
-                    ((line.balance.amount > 0 || !line.partial_reconcile) && prop.amount < 0 && line.st_line.amount < 0 && line.st_line.amount > prop.amount)) {
+                if (((line.balance.amount < 0 || !line.partial_reconcile) && prop.amount > 0 && targetLineAmount > 0 && targetLineAmount < prop.amount) ||
+                    ((line.balance.amount > 0 || !line.partial_reconcile) && prop.amount < 0 && targetLineAmount < 0 && targetLineAmount > prop.amount)) {
                     selected = prop;
                     return false;
                 }
+            targetLineAmount -= prop.amount;
             }
+            return true;
         });
 
         // If no toggled proposition found, reject it
@@ -785,6 +787,7 @@ var StatementModel = BasicModel.extend({
                         model: 'account.tax',
                         method: 'json_friendly_compute_all',
                         args: args,
+                        context: $.extend(self.context || {}, {'round': true}),
                     })
                     .then(function (result) {
                         _.each(result.taxes, function(tax){
@@ -848,7 +851,7 @@ var StatementModel = BasicModel.extend({
                 }) : false,
                 account_code: self.accounts[line.st_line.open_balance_account_id],
             };
-            line.balance.type = line.balance.amount_currency ? (line.balance.amount_currency > 0 && line.st_line.partner_id ? 0 : -1) : 1;
+            line.balance.type = line.balance.amount_currency ? (line.st_line.partner_id ? 0 : -1) : 1;
         });
     },
     /**
@@ -964,6 +967,7 @@ var StatementModel = BasicModel.extend({
         var formatOptions = {
             currency_id: line.st_line.currency_id,
         };
+        var amount = values.amount !== undefined ? values.amount : line.balance.amount;
         var prop = {
             'id': _.uniqueId('createLine'),
             'label': values.label || line.st_line.name,
@@ -975,8 +979,7 @@ var StatementModel = BasicModel.extend({
             'debit': 0,
             'credit': 0,
             'base_amount': values.amount_type !== "percentage" ?
-                (values.amount || line.balance.amount) :
-                line.balance.amount * values.amount / 100,
+                (amount) : line.balance.amount * values.amount / 100,
             'percent': values.amount_type === "percentage" ? values.amount : null,
             'link': values.link,
             'display': true,

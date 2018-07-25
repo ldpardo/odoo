@@ -647,9 +647,18 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
             res_id: (module, name)
             for res_id, module, name in cr.fetchall()
         }
+        def to_xid(record_id):
+            (module, name) = xids[record_id]
+            return ('%s.%s' % (module, name)) if module else name
 
         # create missing xml ids
         missing = self.filtered(lambda r: r.id not in xids)
+        if not missing:
+            return (
+                (record, to_xid(record.id))
+                for record in self
+            )
+
         xids.update(
             (r.id, (modname, '%s_%s_%s' % (
                 r._table,
@@ -658,6 +667,7 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
             )))
             for r in missing
         )
+        fields = ['module', 'model', 'name', 'res_id']
         cr.copy_from(io.StringIO(
             u'\n'.join(
                 u"%s\t%s\t%s\t%d" % (
@@ -669,21 +679,22 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
                 for record in missing
             )),
             table='ir_model_data',
-            columns=['module', 'model', 'name', 'res_id'],
+            columns=fields,
         )
-
-        self.invalidate_cache()
+        self.env['ir.model.data'].invalidate_cache(fnames=fields)
 
         return (
-            (record, '%s.%s' % xids[record.id])
+            (record, to_xid(record.id))
             for record in self
         )
 
     @api.multi
-    def _export_rows(self, fields):
+    def _export_rows(self, fields, batch_invalidate=True):
         """ Export fields of the records in ``self``.
 
             :param fields: list of lists of fields to traverse
+            :param batch_invalidate:
+                whether to clear the cache for the top-level object every so often (avoids huge memory consumption when exporting large numbers of records)
             :return: list of lists of corresponding values
         """
         import_compatible = self.env.context.get('import_compat', True)
@@ -699,6 +710,8 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
                 for rec in sub:
                     yield rec
                 rs.invalidate_cache(ids=sub.ids)
+        if not batch_invalidate:
+            splittor = lambda rs: rs
 
         # both _ensure_xml_id and the splitter want to work on recordsets but
         # neither returns one, so can't really be composed...
@@ -749,7 +762,7 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
                         # 'display_name' where no subfield is exported
                         fields2 = [(p[1:] or ['display_name'] if p and p[0] == name else [])
                                    for p in fields]
-                        lines2 = value._export_rows(fields2)
+                        lines2 = value._export_rows(fields2, batch_invalidate=False)
                         if lines2:
                             # merge first line with record's main line
                             for j, val in enumerate(lines2[0]):
@@ -1378,6 +1391,9 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
             resaction = [action
                          for action in bindings['action']
                          if view_type == 'tree' or not action.get('multi')]
+            resrelate = []
+            if view_type == 'form':
+                resrelate = bindings['action_form_only']
 
             for res in itertools.chain(resreport, resaction):
                 res['string'] = res['name']
@@ -1385,6 +1401,7 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
             result['toolbar'] = {
                 'print': resreport,
                 'action': resaction,
+                'relate': resrelate,
             }
         return result
 
@@ -1688,31 +1705,38 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
         """
         orderby_terms = []
         groupby_terms = [gb['qualified_field'] for gb in annotated_groupbys]
-        groupby_fields = [gb['groupby'] for gb in annotated_groupbys]
         if not orderby:
             return groupby_terms, orderby_terms
 
         self._check_qorder(orderby)
+
+        # when a field is grouped as 'foo:bar', both orderby='foo' and
+        # orderby='foo:bar' generate the clause 'ORDER BY "foo:bar"'
+        groupby_fields = {
+            gb[key]: gb['groupby']
+            for gb in annotated_groupbys
+            for key in ('field', 'groupby')
+        }
         for order_part in orderby.split(','):
             order_split = order_part.split()
             order_field = order_split[0]
             if order_field == 'id' or order_field in groupby_fields:
-
                 if self._fields[order_field.split(':')[0]].type == 'many2one':
                     order_clause = self._generate_order_by(order_part, query).replace('ORDER BY ', '')
                     if order_clause:
                         orderby_terms.append(order_clause)
                         groupby_terms += [order_term.split()[0] for order_term in order_clause.split(',')]
                 else:
-                    order = '"%s" %s' % (order_field, '' if len(order_split) == 1 else order_split[1])
-                    orderby_terms.append(order)
+                    order_split[0] = '"%s"' % groupby_fields.get(order_field, order_field)
+                    orderby_terms.append(' '.join(order_split))
             elif order_field in aggregated_fields:
-                order_split[0] = '"' + order_field + '"'
+                order_split[0] = '"%s"' % order_field
                 orderby_terms.append(' '.join(order_split))
             else:
                 # Cannot order by a field that will not appear in the results (needs to be grouped or aggregated)
                 _logger.warn('%s: read_group order by `%s` ignored, cannot sort on empty columns (not grouped/aggregated)',
                              self._name, order_part)
+
         return groupby_terms, orderby_terms
 
     @api.model
@@ -1997,7 +2021,7 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
         for field in many2onefields:
             ids_set = {d[field] for d in data if d[field]}
             m2o_records = self.env[self._fields[field].comodel_name].browse(ids_set)
-            data_dict = dict(m2o_records.name_get())
+            data_dict = dict(m2o_records.sudo().name_get())
             for d in data:
                 d[field] = (d[field], data_dict[d[field]]) if d[field] else False
 
@@ -2282,6 +2306,7 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
                 #  - copy inherited fields iff their original field is copied
                 fields[name] = field.new(
                     inherited=True,
+                    inherited_field=field,
                     related=(parent_field, name),
                     related_sudo=False,
                     copy=field.copy,
@@ -2399,7 +2424,7 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
             try:
                 field.setup_full(self)
             except Exception:
-                if not self.pool.loaded and field.manual:
+                if not self.pool.loaded and field.base_field.manual:
                     # Something goes wrong when setup a manual field.
                     # This can happen with related fields using another manual many2one field
                     # that hasn't been loaded because the comodel does not exist yet.
@@ -2620,7 +2645,7 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
         try:
             result = records.read([f.name for f in fs], load='_classic_write')
         except AccessError:
-            # not all records may be accessible, try with only current record
+            # not all prefetched records may be accessible, try with only the current recordset
             result = self.read([f.name for f in fs], load='_classic_write')
 
         # check the cache, and update it if necessary
@@ -3915,7 +3940,7 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
         vals = self.copy_data(default)[0]
         # To avoid to create a translation in the lang of the user, copy_translation will do it
         new = self.with_context(lang=None).create(vals)
-        self.copy_translations(new)
+        self.with_context(from_copy_translation=True).copy_translations(new)
         return new
 
     @api.multi
@@ -4752,12 +4777,16 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
             (:class:`Field` instance), including ``self``.
             Return at most ``limit`` records.
         """
-        ids0 = self._prefetch[self._name]
-        ids1 = set(self.env.cache.get_records(self, field)._ids)
-        recs = self.browse([it for it in ids0 if it and it not in ids1])
-        if limit and len(recs) > limit:
-            recs = self + (recs - self)[:(limit - len(self))]
-        return recs
+        recs = self.browse(self._prefetch[self._name])
+        ids = [self.id]
+        for record_id in self.env.cache.get_missing_ids(recs - self, field):
+            if not record_id:
+                # Do not prefetch `NewId`
+                continue
+            ids.append(record_id)
+            if limit and limit <= len(ids):
+                break
+        return self.browse(ids)
 
     @api.model
     def refresh(self):
@@ -5011,28 +5040,111 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
         if not all(name in self._fields for name in names):
             return {}
 
-        # filter out keys in field_onchange that do not refer to actual fields
-        dotnames = []
-        for dotname in field_onchange:
-            try:
-                model = self.browse()
-                for name in dotname.split('.'):
-                    model = model[name]
-                dotnames.append(dotname)
-            except Exception:
-                pass
+        class PrefixTree(OrderedDict):
+            """ A prefix tree for sequences of field names. The tree is a
+                dictionary that associates each given field name to its
+                corresponding subtree (in fields order)::
+
+                    # tree corresponding to dotnames
+                    # ['name', 'line_ids.product_id', 'line_ids.tags_ids.name']
+                    {
+                        'name': {},
+                        'line_ids': {
+                            'product_id': {},
+                            'tags_ids': {
+                                'name': {},
+                            },
+                        },
+                    }
+            """
+            def __init__(self, model, dotnames):
+                if not dotnames:
+                    return
+                # group dotnames by prefix
+                suffixes = defaultdict(list)
+                for dotname in dotnames:
+                    names = dotname.split('.', 1)
+                    name_suffixes = suffixes[names[0]]
+                    if len(names) > 1:
+                        name_suffixes.append(names[1])
+                # fill in self in fields order
+                for name in model._fields:
+                    if name in suffixes:
+                        self[name] = PrefixTree(model[name], suffixes[name])
+
+            def dotnames(self):
+                """ Iterate over the sequences of field names. """
+                for name, subnames in self.items():
+                    yield name
+                    for dotname in subnames.dotnames():
+                        yield "%s.%s" % (name, dotname)
+
+        nametree = PrefixTree(self.browse(), field_onchange)
+        dotnames = list(nametree.dotnames())
+
+        def snapshot(record, tree=nametree):
+            """ Return a dict with the values of record, following nametree. """
+            vals = {}
+            for name, subnames in tree.items():
+                if subnames:
+                    # x2many fields as {line: snapshot(line), ...}
+                    vals[name] = OrderedDict(
+                        (line, snapshot(line, subnames))
+                        for line in record[name]
+                    )
+                else:
+                    vals[name] = record[name]
+            return vals
+
+        def diff(record, old, new, tree=nametree):
+            """ Return the values that differ between snapshots.
+                The snapshot ``old`` may be empty (for new records).
+            """
+            result = {}
+            for name, subnames in tree.items():
+                if old and old[name] == new[name]:
+                    continue
+                field = record._fields[name]
+                if not subnames:
+                    result[name] = field.convert_to_onchange(new[name], record, subnames)
+                    continue
+                # x2many fields: serialize value as commands
+                result[name] = commands = [(5,)]
+                old_val = old.get(name) or {}
+                for line, vals in new[name].items():
+                    vals0 = (old_val.get(line) or snapshot(line, subnames)) if line.id else {}
+                    line_diff = diff(line, vals0, vals, subnames)
+                    if not line.id:
+                        commands.append((0, line.id.ref or 0, line_diff))
+                    elif line_diff:
+                        commands.append((1, line.id, line_diff))
+                    else:
+                        commands.append((4, line.id))
+            return result
+
+        # prefetch x2many lines without data (for the initial snapshot)
+        for name, subnames in nametree.items():
+            if subnames and values.get(name):
+                # retrieve all ids in commands, and read the expected fields
+                line_ids = []
+                for cmd in values[name]:
+                    if cmd[0] in (1, 4):
+                        line_ids.append(cmd[1])
+                    elif cmd[0] == 6:
+                        line_ids.extend(cmd[2])
+                lines = self.browse()[name].browse(line_ids)
+                lines.read(list(subnames), load='_classic_write')
 
         # create a new record with values, and attach ``self`` to it
         with env.do_in_onchange():
             record = self.new(values)
-            values = {name: record[name] for name in record._cache}
+            values = {name: record[name] for name in nametree}
             # attach ``self`` with a different context (for cache consistency)
             record._origin = self.with_context(__onchange=True)
 
-        # load fields on secondary records, to avoid false changes
+        # make a snapshot based on the initial values of record
         with env.do_in_onchange():
-            for dotname in dotnames:
-                record.mapped(dotname)
+            before = snapshot(record)
 
         # determine which field(s) should be triggered an onchange
         todo = list(names) or list(values)
@@ -5051,7 +5163,6 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
                 record[name] = value
 
         result = {}
-        dirty = set()
 
         # process names in order (or the keys of values if no name given)
         while todo:
@@ -5077,22 +5188,14 @@ class BaseModel(MetaModel('DummyModel', (object,), {'_register': False})):
                         field.type in ('one2many', 'many2many') and newval._is_dirty()
                     ):
                         todo.append(name)
-                        dirty.add(name)
 
-        # determine subfields for field.convert_to_onchange() below
-        Tree = lambda: defaultdict(Tree)
-        subnames = Tree()
-        for dotname in dotnames:
-            subtree = subnames
-            for name in dotname.split('.'):
-                subtree = subtree[name]
-
-        # collect values from dirty fields
+        # make a snapshot based on the final values of record
         with env.do_in_onchange():
-            result['value'] = {
-                name: self._fields[name].convert_to_onchange(record[name], record, subnames[name])
-                for name in dirty
-            }
+            after = snapshot(record)
+
+        # determine values that have changed by comparing snapshots
+        self.invalidate_cache()
+        result['value'] = diff(record, before, after)
 
         return result
 

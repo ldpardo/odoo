@@ -22,13 +22,14 @@
 # Hendro Yulianto <hyulianto@gmail.com>, 2017
 # Hendra So <mask783@gmail.com>, 2017
 # Muhammad Syarif <mhdsyarif.ms@gmail.com>, 2017
+# Ikhsanul Wirsa <iwirsa02@outlook.co.id>, 2018
 msgid ""
 msgstr ""
 "Project-Id-Version: Odoo Server 11.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2018-03-12 15:37+0000\n"
-"PO-Revision-Date: 2018-03-12 15:37+0000\n"
-"Last-Translator: Muhammad Syarif <mhdsyarif.ms@gmail.com>, 2017\n"
+"POT-Creation-Date: 2018-04-27 14:47+0000\n"
+"PO-Revision-Date: 2018-04-27 14:47+0000\n"
+"Last-Translator: Ikhsanul Wirsa <iwirsa02@outlook.co.id>, 2018\n"
 "Language-Team: Indonesian (https://www.transifex.com/odoo/teams/41243/id/)\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -40,16 +41,14 @@ msgstr ""
 #: model:ir.model.fields,help:account.field_account_invoice_state
 msgid ""
 " * The 'Draft' status is used when a user is encoding a new and unconfirmed Invoice.\n"
-" * The 'Pro-forma' status is used when the invoice does not have an invoice number.\n"
 " * The 'Open' status is used when user creates invoice, an invoice number is generated. It stays in the open status till the user pays the invoice.\n"
 " * The 'Paid' status is set automatically when the invoice is paid. Its related journal entries may or may not be reconciled.\n"
 " * The 'Cancelled' status is used when user cancel invoice."
 msgstr ""
-"* Status 'Rancangan' digunakan ketika pengguna membuat faktur baru yang belum dikonfirmasi.\n"
-" * Status 'Pro-forma' digunakan ketika tagihan tidak memiliki nomor tagihan.\n"
-" * Status 'Terbuka' digunakan ketika pengguna membuat tagihan; dan nomor faktur dikeluarkan. Statusnya terbuka sampai pengguna membayarnya.\n"
-" * Status 'Lunas' aktif secara otomatis setelah faktur dibayar. Ayat jurnal terkait bisa direkonsiliasi, bisa juga tidak.\n"
-" * Status 'Dibatalkan' digunakan ketika pengguna membatalkan faktur."
+"* Status 'Konsep' digunakan ketika pengguna menyandikan faktur baru yang belum dikonfirmasi.\n"
+"* Status 'Buka' digunakan ketika pengguna membuat faktur, sebuah nomor faktur akan dihasilkan. Faktur tersebut akan tetap berada pada status buka hingga pengguna membayar faktur.\n"
+"* Status 'Dibayar' diatur secara otomatis ketika faktur telah dibayar. Entri jurnal yang berkaitan bisa saja akan atau tidak akan disesuaikan.\n"
+"* Status 'Dibatalkan' digunakan ketika pengguna membatalkan faktur."
 
 #. module: account
 #: model:ir.model.fields,field_description:account.field_account_chart_template_code_digits
@@ -195,13 +194,23 @@ msgid ""
 "</p>\n"
 "</data>"
 msgstr ""
+"<?xml version=\"1.0\"?>\n"
+"<data><p>Kepada Yth. ${object.partner_id.name},</p>\n"
+"<p>Terima kasih atas pembayaran Anda.<br/>Ini adalah kuitansi pembayaran Anda. <strong>${(object.name or '').replace('/','-')}</strong> sebesar <strong>${format_amount(object.amount, object.currency_id)}</strong> dari ${object.company_id.name}.</p>\n"
+"<p>Jika Anda memiliki pertanyaan, jangan segan untuk menghubungi kami.</p>\n"
+"<p>Salam hormat,\n"
+"% if user and user.signature:\n"
+"${user.signature | safe}\n"
+"% endif\n"
+"</p>\n"
+"</data>"
 
 #. module: account
 #: model:mail.template,body_html:account.mail_template_data_notification_email_account_invoice
 msgid ""
 "<div>\n"
 "% set record = ctx.get('record')\n"
-"% set company = record and record.company_id or user.company_id\n"
+"% set company = record and record.company_id or ctx.get('company')\n"
 "<table border=\"0\" width=\"100%\" cellpadding=\"0\" bgcolor=\"#ededed\" style=\"padding: 20px; background-color: #ededed; border-collapse:separate;\" summary=\"o_mail_notification\">\n"
 "<tbody>\n"
 "    <!-- HEADER -->\n"
@@ -267,7 +276,7 @@ msgid ""
 msgstr ""
 "<div>\n"
 "% set record = ctx.get('record')\n"
-"% set company = record and record.company_id or user.company_id\n"
+"% set company = record and record.company_id or ctx.get('company')\n"
 "<table border=\"0\" width=\"100%\" cellpadding=\"0\" bgcolor=\"#ededed\" style=\"padding: 20px; background-color: #ededed; border-collapse:separate;\" summary=\"o_mail_notification\">\n"
 "<tbody>\n"
 "    <!-- HEADER -->\n"
@@ -324,7 +333,7 @@ msgstr ""
 "    </tr>\n"
 "    <tr>\n"
 "        <td align=\"center\">\n"
-"            Powered by <a target=\"_blank\" href=\"https://www.odoo.com\">Odoo</a>.\n"
+"            Diberdayakan oleh <a target=\"_blank\" href=\"https://www.odoo.com\">Odoo</a>.\n"
 "        </td>\n"
 "    </tr>\n"
 "</tbody>\n"
@@ -379,6 +388,50 @@ msgid ""
 "</p>\n"
 "</div>"
 msgstr ""
+"<div>\n"
+"<p>Kepada Yth. ${object.partner_id.name}\n"
+"% set access_action = object.with_context(force_website=True).get_access_action()\n"
+"% set is_online = access_action and access_action['type'] == 'ir.actions.act_url'\n"
+"% set access_url = object.get_mail_url()\n"
+"\n"
+"% if object.partner_id.parent_id:\n"
+"    (<i>${object.partner_id.parent_id.name}</i>)\n"
+"% endif\n"
+",</p>\n"
+"<p>Ini adalah lampiran \n"
+"% if object.number:\n"
+"faktur Anda <strong>${object.number}</strong>\n"
+"% else:\n"
+"faktur Anda\n"
+"% endif\n"
+"% if object.origin:\n"
+"(dengan nomor: ${object.origin})\n"
+"% endif\n"
+"sejumlah <strong>${format_amount(object.amount_total, object.currency_id)}</strong>\n"
+"dari ${object.company_id.name}.\n"
+"</p>\n"
+"\n"
+"% if is_online:\n"
+"    <br/><br/>\n"
+"    <center>\n"
+"      <a href=\"${access_url}\" style=\"background-color: #1abc9c; padding: 20px; text-decoration: none; color: #fff; border-radius: 5px; font-size: 16px;\" class=\"o_default_snippet_text\">Lihat Faktur</a>\n"
+"    </center>\n"
+"% endif\n"
+"    <br/><br/>\n"
+"\n"
+"% if object.state=='paid':\n"
+"    <p>Faktur ini telah dibayar.</p>\n"
+"% else:\n"
+"    <p>Mohon segera lakukan pembayaran.</p>\n"
+"% endif\n"
+"\n"
+"<p>Terima kasih,</p>\n"
+"<p style=\"color:#888888\">\n"
+"% if object.user_id and object.user_id.signature:\n"
+"    ${object.user_id.signature | safe}\n"
+"% endif\n"
+"</p>\n"
+"</div>"
 
 #. module: account
 #: model:ir.ui.view,arch_db:account.account_planner
@@ -1598,6 +1651,8 @@ msgid ""
 "Account used as counterpart for the journal entry, for taxes eligible based "
 "on payments."
 msgstr ""
+"Akun yang digunakan sebagai perbandingan untuk pencatatan jurnal, untuk "
+"pajak yang sesuai dengan pembayaran."
 
 #. module: account
 #: model:ir.model.fields,field_description:account.field_res_config_settings_module_account_accountant
@@ -1757,6 +1812,21 @@ msgstr "Alamat"
 #: model:ir.model.fields,field_description:account.field_tax_adjustments_wizard_tax_id
 msgid "Adjustment Tax"
 msgstr "Pajak Penyesuaian"
+
+#. module: account
+#: model:ir.model.fields,field_description:account.field_tax_adjustments_wizard_adjustment_type
+msgid "Adjustment Type"
+msgstr "Jenis Penyesuaian"
+
+#. module: account
+#: selection:tax.adjustments.wizard,adjustment_type:0
+msgid "Adjustment in favor of the Estate"
+msgstr ""
+
+#. module: account
+#: selection:tax.adjustments.wizard,adjustment_type:0
+msgid "Adjustment in your favor"
+msgstr ""
 
 #. module: account
 #: model:ir.ui.view,arch_db:account.view_account_tax_template_form
@@ -2200,7 +2270,7 @@ msgstr "Terapkan hanya jika negara pengiriman atau faktur sesuai dengan grup."
 #. module: account
 #: model:ir.model.fields,help:account.field_account_fiscal_position_template_country_group_id
 msgid "Apply only if delivery or invoicing country match the group."
-msgstr ""
+msgstr "Terapkan hanya jika negara pengiriman atau faktur sesuai dengan grup."
 
 #. module: account
 #: model:ir.model.fields,help:account.field_account_fiscal_position_country_id
@@ -2472,7 +2542,7 @@ msgstr "Rekening Koran"
 #: code:addons/account/models/account_bank_statement.py:935
 #, python-format
 msgid "Bank Statement %s"
-msgstr ""
+msgstr "Rekening Koran %s"
 
 #. module: account
 #: model:ir.model,name:account.model_account_bank_statement_line
@@ -5912,7 +5982,6 @@ msgstr "Difakturkan"
 #: model:ir.ui.view,arch_db:account.portal_my_home_menu_invoice
 #: model:ir.ui.view,arch_db:account.portal_my_invoices
 #: model:ir.ui.view,arch_db:account.res_config_settings_view_form
-#: model:ir.ui.view,arch_db:account.view_account_invoice_filter
 #: model:ir.ui.view,arch_db:account.view_account_payment_form
 #: model:ir.ui.view,arch_db:account.view_account_payment_graph
 #: model:ir.ui.view,arch_db:account.view_invoice_graph
@@ -6245,7 +6314,7 @@ msgstr "Jurnal-jurnal"
 #: model:ir.actions.report,name:account.action_report_journal
 #: model:ir.ui.menu,name:account.menu_print_journal
 msgid "Journals Audit"
-msgstr ""
+msgstr "Audit Jurnal"
 
 #. module: account
 #: selection:res.company,fiscalyear_last_month:0
@@ -6787,6 +6856,9 @@ msgid ""
 "Electronic: Get paid automatically through a payment acquirer by requesting a transaction on a card saved by the customer when buying or subscribing online (payment token).\n"
 "Batch Deposit: Encase several customer checks at once by generating a batch deposit to submit to your bank. When encoding the bank statement in Odoo,you are suggested to reconcile the transaction with the batch deposit. Enable this option from the settings."
 msgstr ""
+"Manual: Bayar dengan uang kontan, cek atau metode lain diluar sistem Odoo.\n"
+"Elektronik: Bayar secara otomatis melalui penyedia pembayaran dengan meminta transaksi menggunakan kartu yang dimiliki pelanggan ketika membeli atau berlangganan secara daring.\n"
+"Setoran Massal: Mencairkan beberapa cek pelanggan sekaligus dengan membuat setoran massal untuk diberikan kepada bank Anda. Ketika menulis rekening koran di Odoo, Anda disarankan untuk menyesuaikan transaksi dengan setoran massal. Aktifkan opsi ini di pengaturan."
 
 #. module: account
 #: model:ir.model.fields,help:account.field_account_abstract_payment_payment_method_id
@@ -6799,6 +6871,10 @@ msgid ""
 "Batch Deposit: Encase several customer checks at once by generating a batch deposit to submit to your bank. When encoding the bank statement in Odoo, you are suggested to reconcile the transaction with the batch deposit.To enable batch deposit,module account_batch_deposit must be installed.\n"
 "SEPA Credit Transfer: Pay bill from a SEPA Credit Transfer file you submit to your bank. To enable sepa credit transfer, module account_sepa must be installed "
 msgstr ""
+"Manual: Bayar dengan uang kontan, cek atau metode lain diluar sistem Odoo.\n"
+"Elektronik: Bayar secara otomatis melalui penyedia pembayaran dengan meminta transaksi menggunakan kartu yang dimiliki pelanggan ketika membeli atau berlangganan secara daring (token pembayaran).\n"
+"Setoran Massal: Mencairkan beberapa cek pelanggan sekaligus dengan membuat setoran massal untuk diberikan kepada bank Anda. Ketika menulis rekening koran di Odoo, Anda disarankan untuk menyesuaikan transaksi dengan setoran massal. Untuk mengaktifkan setoran massal, modul account_batch_deposit harus terpasang.\n"
+"Transfer Kredit SEPA: Bayar tagihan melalui berkas Transfer Kredit SEPA (metode pembayaran Euro terintegrasi) yang Anda serahkan kepada bank. Untuk mengaktifkan transfer kredit SEPA, modul account_sepa harus terpasang."
 
 #. module: account
 #: model:ir.model.fields,help:account.field_account_journal_outbound_payment_method_ids
@@ -7198,17 +7274,6 @@ msgid "Normal Text"
 msgstr "Teks Biasa"
 
 #. module: account
-#: model:ir.ui.view,arch_db:account.view_account_invoice_filter_inherit_credit_notes
-#: model:ir.ui.view,arch_db:account.view_account_invoice_filter_inherit_invoices
-msgid "Not Draft"
-msgstr "Bukan Rancangan"
-
-#. module: account
-#: model:ir.ui.view,arch_db:account.view_account_invoice_filter
-msgid "Not Paid"
-msgstr "Belum Lunas"
-
-#. module: account
 #. openerp-web
 #: code:addons/account/static/src/xml/account_reconciliation.xml:254
 #: model:ir.model.fields,field_description:account.field_account_account_template_note
@@ -7462,13 +7527,14 @@ msgstr ""
 #. openerp-web
 #: selection:account.invoice,state:0 selection:account.invoice.report,state:0
 #: code:addons/account/static/src/xml/account_payment.xml:82
+#: model:ir.ui.view,arch_db:account.view_account_invoice_filter
 #, python-format
 msgid "Open"
 msgstr "Terbuka"
 
 #. module: account
 #. openerp-web
-#: code:addons/account/static/src/js/reconciliation/reconciliation_model.js:636
+#: code:addons/account/static/src/js/reconciliation/reconciliation_model.js:662
 #: code:addons/account/static/src/xml/account_reconciliation.xml:131
 #, python-format
 msgid "Open balance"
@@ -7660,12 +7726,13 @@ msgstr "Kemasan"
 #. module: account
 #: selection:account.invoice,state:0 selection:account.invoice.report,state:0
 #: model:ir.ui.view,arch_db:account.report_overdue_document
+#: model:ir.ui.view,arch_db:account.view_account_invoice_filter
 #: model:mail.message.subtype,name:account.mt_invoice_paid
 msgid "Paid"
 msgstr "Lunas"
 
 #. module: account
-#: code:addons/account/models/account_payment.py:411
+#: code:addons/account/models/account_payment.py:426
 #, python-format
 msgid "Paid Invoices"
 msgstr "Faktur Lunas"
@@ -8109,6 +8176,7 @@ msgid ""
 "Please install a chart of accounts or create a miscellaneous journal before "
 "proceeding."
 msgstr ""
+"Mohon pasang skema akun atau buat sebuah jurnal bebas sebelum melanjutkan."
 
 #. module: account
 #: model:ir.ui.view,arch_db:account.view_account_form
@@ -8308,6 +8376,8 @@ msgstr "Laba dan Rugi"
 msgid ""
 "Programming error: wizard action executed without active_ids in context."
 msgstr ""
+"Kesalahan pemrograman: aksi wizard dieksekusi tanpa active_ids dalam "
+"konteks."
 
 #. module: account
 #: model:ir.ui.view,arch_db:account.view_account_chart_template_form
@@ -9821,6 +9891,9 @@ msgid ""
 "This is needed when cancelling the source: it will post the inverse journal "
 "entry to cancel that part too."
 msgstr ""
+"Kolom teknis yang digunakan untuk melacak penyesuaian basis pajak. Ini "
+"diperlukan ketika membatalkan sumber: Hal itu akan menerbitkan entri jurnal "
+"yang berlawanan untuk membatalkan bagian tersebut."
 
 #. module: account
 #: model:ir.model.fields,help:account.field_account_move_line_tax_exigible
@@ -10249,6 +10322,8 @@ msgstr "Referensi rekanan untuk faktur ini."
 msgid ""
 "The partners of the journal's company and the related bank account mismatch."
 msgstr ""
+"Sekutu perusahaan yang menerbitkan jurnal dan ketidakcocokan akun bank yang "
+"berkaitan."
 
 #. module: account
 #: code:addons/account/models/account_payment.py:60
@@ -10798,7 +10873,6 @@ msgid "Total"
 msgstr "Total"
 
 #. module: account
-#: model:ir.model.fields,field_description:account.field_account_invoice_line_price_total
 #: model:ir.ui.view,arch_db:account.view_move_tree
 msgid "Total Amount"
 msgstr "Total Jumlah:"
@@ -11650,6 +11724,7 @@ msgid ""
 "You cannot change the currency of the company since some journal items "
 "already exist"
 msgstr ""
+"Anda tidak dapat mengubah perusahaan karena beberapa item jurnal telah ada."
 
 #. module: account
 #: code:addons/account/models/account.py:235
@@ -11753,6 +11828,8 @@ msgid ""
 "You cannot have a receivable/payable account that is not reconcilable. "
 "(account code: %s)"
 msgstr ""
+"Anda tidak dapat memiliki akun yang dapat diterima/dapat dibayar yang tidak "
+"bisa disesuaikan. (kode akun: %s)"
 
 #. module: account
 #. openerp-web
