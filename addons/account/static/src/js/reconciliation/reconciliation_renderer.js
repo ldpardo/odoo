@@ -7,6 +7,7 @@ var relational_fields = require('web.relational_fields');
 var basic_fields = require('web.basic_fields');
 var core = require('web.core');
 var time = require('web.time');
+var session = require('web.session');
 var qweb = core.qweb;
 var _t = core._t;
 
@@ -121,12 +122,16 @@ var StatementRenderer = Widget.extend(FieldManagerMixin, {
             $done.find('.button_back_to_statement').click(this._onGoToBankStatement.bind(this));
             this.$el.children().hide();
             // display rainbowman after full reconciliation
-            this.trigger_up('show_effect', {
-                type: 'rainbow_man',
-                fadeout: 'no',
-                message: $done,
-            });
-            this.$el.css('min-height', '450px');
+            if (session.show_effect) {
+                this.trigger_up('show_effect', {
+                    type: 'rainbow_man',
+                    fadeout: 'no',
+                    message: $done,
+                });
+                this.$el.css('min-height', '450px');
+            } else {
+                $done.appendTo(this.$el);
+            }
         }
 
         if (state.notifications) {
@@ -310,7 +315,9 @@ var LineRenderer = Widget.extend(FieldManagerMixin, {
             };
             self.fields.partner_id.appendTo(self.$('.accounting_view caption'));
         });
-        this.$('thead .line_info_button').attr("data-content", qweb.render('reconciliation.line.statement_line.details', {'state': this._initialState}));
+        $('<span class="line_info_button fa fa-info-circle"/>')
+            .appendTo(this.$('thead .cell_info_popover'))
+            .attr("data-content", qweb.render('reconciliation.line.statement_line.details', {'state': this._initialState}));
         this.$el.popover({
             'selector': '.line_info_button',
             'placement': 'left',
@@ -369,18 +376,21 @@ var LineRenderer = Widget.extend(FieldManagerMixin, {
 
         // loop state propositions
         var props = [];
-        var nb_debit_props = 0;
-        var nb_credit_props = 0;
+        var partialDebitProps = 0;
+        var partialCreditProps = 0;
         _.each(state.reconciliation_proposition, function (prop) {
             if (prop.display) {
                 props.push(prop);
-                if (prop.amount < 0)
-                    nb_debit_props += 1;
-                else if (prop.amount > 0)
-                    nb_credit_props += 1;
+                if (prop.amount > 0 && prop.amount > state.st_line.amount) {
+                    partialDebitProps++;
+                } else if (prop.amount < 0 && prop.amount < state.st_line.amount) {
+                    partialCreditProps++;
+                }
+
             }
         });
 
+        var targetLineAmount = state.st_line.amount;
         _.each(props, function (line) {
             var $line = $(qweb.render("reconciliation.line.mv_line", {'line': line, 'state': state}));
             if (!isNaN(line.id)) {
@@ -389,10 +399,10 @@ var LineRenderer = Widget.extend(FieldManagerMixin, {
                     .attr("data-content", qweb.render('reconciliation.line.mv_line.details', {'line': line}));
             }
             if (line.already_paid === false &&
-                ((state.balance.amount_currency < 0 || line.partial_reconcile) && nb_credit_props == 1
-                    && line.amount > 0 && state.st_line.amount > 0 && state.st_line.amount < line.amount) ||
-                ((state.balance.amount_currency > 0 || line.partial_reconcile) && nb_debit_props == 1
-                    && line.amount < 0 && state.st_line.amount < 0 && state.st_line.amount > line.amount)) {
+                ((state.balance.amount_currency < 0 || line.partial_reconcile)
+                    && line.amount > 0 && state.st_line.amount > 0 && targetLineAmount < line.amount && partialDebitProps <= 1) ||
+                ((state.balance.amount_currency > 0 || line.partial_reconcile)
+                    && line.amount < 0 && state.st_line.amount < 0 && targetLineAmount > line.amount && partialCreditProps <= 1)) {
                 var $cell = $line.find(line.amount > 0 ? '.cell_right' : '.cell_left');
                 var text;
                 if (line.partial_reconcile) {
@@ -406,6 +416,8 @@ var LineRenderer = Widget.extend(FieldManagerMixin, {
                     .prependTo($cell)
                     .attr("data-content", text);
             }
+            targetLineAmount -= line.amount;
+
             $props.append($line);
         });
 
@@ -745,7 +757,7 @@ var LineRenderer = Widget.extend(FieldManagerMixin, {
             }
         });
         if (invalid.length) {
-            this.do_warn(_("Some fields are undefined"), invalid.join(', '));
+            this.do_warn(_t("Some fields are undefined"), invalid.join(', '));
             return;
         }
         this.trigger_up('create_proposition');

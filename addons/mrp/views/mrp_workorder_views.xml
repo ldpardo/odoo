@@ -6,15 +6,13 @@
         <field name="arch" type="xml">
             <search>
                 <field name="workcenter_id"/>
-                <filter string="Today" name="today" domain="[('date_start','&gt;=',time.strftime('%%Y-%%m-%%d'))]"/>
-                <filter string="This Month" name="thismonth" domain="[('date_start','&gt;=',time.strftime('%%Y-%%m-01'))]"/>
-                <filter string="This Year" name="thisyear" domain="[('date_start','&gt;=',time.strftime('%%Y-01-01'))]"/>
-                <separator/>
                 <filter string="Ready" name="ready" domain="[('state','=','ready')]"/>
                 <filter string="Pending" name="pending" domain="[('state','=','pending')]"/>
                 <filter string="In Progress" name="progress" domain="[('state','=','progress')]"/>
                 <filter string="Done" name="done" domain="[('state','=', 'done')]"/>
                 <filter string="Late" name="late" domain="[('date_planned_start','&lt;=',time.strftime('%%Y-%%m-%%d'))]"/>
+                <separator/>
+                <filter string="Start Date" name="date_start_filter" date="date_start"/>
                 <separator/>
             </search>
         </field>
@@ -196,18 +194,19 @@
                             <label for="duration"/>
                             <div>
                                 <button style="pointer-events: none;" class="oe_inline label label-default">
-                                    <field name="duration" widget="mrp_time_counter"/>
+                                    <field name="duration" widget="mrp_time_counter" help="Time the currently logged user spent on this workorder."/>
                                 </button>
                             </div>
                         </group>
                     </group>
                     <group>
-                        <field name="time_ids" nolabel="1">
+                        <field name="time_ids" nolabel="1" context="{'default_workcenter_id': workcenter_id}">
                             <tree>
                                 <field name="date_start"/>
                                 <field name="date_end"/>
                                 <field name="duration" widget="float_time" sum="Total duration"/>
                                 <field name="user_id"/>
+                                <field name="workcenter_id" invisible="1"/>
                                 <field name="loss_id" string="Efficiency"/>
                             </tree>
                             <form>
@@ -219,6 +218,7 @@
                                     </group>
                                     <group>
                                         <field name="user_id"/>
+                                        <field name="workcenter_id"/>
                                         <field name="loss_id"/>
                                     </group>
                                 </group>
@@ -267,7 +267,7 @@
                     <filter string="Work Center" name="work_center" domain="[]" context="{'group_by':'workcenter_id'}"/>
                     <filter string="Production" name="production" domain="[]" context="{'group_by':'production_id'}"/>
                     <filter string="Status" name="status" domain="[]" context="{'group_by':'state'}"/>
-                    <filter string="Scheduled Month" name="scheduled_month" domain="[]" context="{'group_by':'date_planned_start'}" help="Scheduled Date by Month"/>
+                    <filter string="Scheduled Date" name="scheduled_month" domain="[]" context="{'group_by':'date_planned_start'}"/>
                 </group>
              </search>
         </field>
@@ -356,11 +356,11 @@
                                         <span><t t-esc="record.product_id.value"/></span> <span><t t-esc="record.qty_production.value"/> <t t-esc="record.product_uom_id.value"/></span>
                                     </div>
                                     <div class="oe_kanban_bottom_right" t-if="record.state.raw_value == 'progress'">
-                                        <span t-if="record.working_state.raw_value != 'blocked' and record.working_user_ids.raw_value.length > 0"><i class="fa fa-play"/></span>
-                                        <span t-if="record.working_state.raw_value != 'blocked' and record.working_user_ids.raw_value.length == 0 and record.last_working_user_id.raw_value"><i class="fa fa-pause"/></span>
-                                        <span t-if="record.working_state.raw_value == 'blocked' and (record.working_user_ids.raw_value.length == 0 or record.last_working_user_id.raw_value)"><i class="fa fa-stop"/></span>
+                                        <span t-if="record.working_state.raw_value != 'blocked' and record.working_user_ids.raw_value.length > 0"><i class="fa fa-play" role="img" aria-label="Run" title="Run"/></span>
+                                        <span t-if="record.working_state.raw_value != 'blocked' and record.working_user_ids.raw_value.length == 0 and record.last_working_user_id.raw_value"><i class="fa fa-pause" role="img" aria-label="Pause" title="Pause"/></span>
+                                        <span t-if="record.working_state.raw_value == 'blocked' and (record.working_user_ids.raw_value.length == 0 or record.last_working_user_id.raw_value)"><i class="fa fa-stop" role="img" aria-label="Stop" title="Stop"/></span>
                                         <t t-if="record.last_working_user_id.raw_value">
-                                            <img t-att-src="kanban_image('res.users', 'image_small', record.last_working_user_id.raw_value)" width="24" height="24" class="oe_kanban_avatar"/>
+                                            <img t-att-src="kanban_image('res.users', 'image_small', record.last_working_user_id.raw_value)" width="24" height="24" class="oe_kanban_avatar" alt="Avatar"/>
                                         </t>
                                     </div>
                                 </div>

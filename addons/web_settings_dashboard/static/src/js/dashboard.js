@@ -2,6 +2,7 @@ odoo.define('web_settings_dashboard', function (require) {
 "use strict";
 
 var AbstractAction = require('web.AbstractAction');
+var config = require('web.config');
 var core = require('web.core');
 var framework = require('web.framework');
 var Widget = require('web.Widget');
@@ -104,15 +105,17 @@ var DashboardInvitations = Widget.extend({
             }
             emails = _.difference(emails, invalidEmails);
 
-            // filter out already processed or pending addresses
-            var pendingEmails = _.map(this.data.pending_users, function (info) {
-                return info[1];
-            });
-            var existingEmails = _.intersection(emails, this.emails.concat(pendingEmails));
-            if (existingEmails.length) {
-                this.do_warn(_.str.sprintf(_t('The following email addresses already exist: %s.'), existingEmails.join(', ')));
+            if (!this.data.resend_invitation) {
+                // filter out already processed or pending addresses
+                var pendingEmails = _.map(this.data.pending_users, function (info) {
+                    return info[1];
+                });
+                var existingEmails = _.intersection(emails, this.emails.concat(pendingEmails));
+                if (existingEmails.length) {
+                    this.do_warn(_.str.sprintf(_t('The following email addresses already exist: %s.'), existingEmails.join(', ')));
+                }
+                emails = _.difference(emails, existingEmails);
             }
-            emails = _.difference(emails, existingEmails);
 
             // add valid email addresses, if any
             if (emails.length) {
@@ -139,7 +142,7 @@ var DashboardInvitations = Widget.extend({
      * @returns {boolean} true iff the given email address is valid
      */
     _validateEmail: function (email) {
-        var re = /^([\w-]+(?:\.[\w-]+)*)@((?:[\w-]+\.)*\w[\w-]{0,66})\.([a-z]{2,63}(?:\.[a-z]{2})?)$/i;
+        var re = /^([a-z0-9][-a-z0-9_\+\.]*)@((?:[\w-]+\.)*\w[\w-]{0,66})\.([a-z]{2,63}(?:\.[a-z]{2})?)$/i;
         return re.test(email);
     },
     on_access_rights_clicked: function (e) {
@@ -277,6 +280,7 @@ var DashboardShare = Widget.extend({
         'click .tw_share': 'share_twitter',
         'click .fb_share': 'share_facebook',
         'click .li_share': 'share_linkedin',
+        'click .o_web_settings_dashboard_force_demo': '_onClickForceDemo',
     },
 
     init: function (parent, data) {
@@ -284,6 +288,7 @@ var DashboardShare = Widget.extend({
         this.parent = parent;
         this.share_url = 'https://www.odoo.com';
         this.share_text = encodeURIComponent("I am using #Odoo - Awesome open source business apps.");
+        return this._super.apply(this, arguments);
     },
 
     /**
@@ -317,7 +322,23 @@ var DashboardShare = Widget.extend({
             popup_url,
             'Share Dialog',
             'width=600,height=400'); // We have to add a size otherwise the window pops in a new tab
-    }
+    },
+
+    //--------------------------------------------------------------------------
+    // Handlers
+    //--------------------------------------------------------------------------
+
+    /**
+     * Forces demo data to be installed in a database without demo data installed.
+     *
+     * @private
+     * @param {MouseEvent} ev
+     */
+    _onClickForceDemo: function (ev) {
+        ev.preventDefault();
+        this.do_action('base.demo_force_install_action');
+        config.debug = false;
+    },
 });
 
 var DashboardTranslations = Widget.extend({

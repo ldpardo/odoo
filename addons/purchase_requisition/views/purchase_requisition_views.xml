@@ -263,7 +263,7 @@
                                     <field name="vendor_id"/>
                                 </div>
                                 <div class="oe_kanban_bottom_right">
-                                    <img t-att-src="kanban_image('res.users', 'image_small', record.user_id.raw_value)" t-att-title="record.user_id.value" width="24" height="24" class="oe_kanban_avatar pull-right"/>
+                                    <img t-att-src="kanban_image('res.users', 'image_small', record.user_id.raw_value)" t-att-title="record.user_id.value" t-att-alt="record.user_id.value" width="24" height="24" class="oe_kanban_avatar pull-right"/>
                                 </div>
                             </div>
                         </div>
@@ -292,7 +292,7 @@
                         <filter string="Source" name="source" domain="[]" context="{'group_by':'origin'}"/>
                         <filter string="Status" name="status" domain="[]" context="{'group_by':'state'}"/>
                         <filter string="Ordering Date" name="ordering_date" domain="[]" context="{'group_by':'ordering_date'}"/>
-                        <filter string="End Month" name="end_month" domain="[]" context="{'group_by':'date_end'}"/>
+                        <filter string="End Date" name="end_month" domain="[]" context="{'group_by':'date_end'}"/>
                     </group>
                 </search>
             </field>

@@ -10,7 +10,7 @@ from dateutil.relativedelta import relativedelta
 from werkzeug.urls import url_encode
 
 from odoo import api, exceptions, fields, models, _
-from odoo.tools import float_is_zero, float_compare, pycompat
+from odoo.tools import email_re, email_split, email_escape_char, float_is_zero, float_compare, pycompat
 from odoo.tools.misc import formatLang
 
 from odoo.exceptions import AccessError, UserError, RedirectWarning, ValidationError, Warning
@@ -59,9 +59,9 @@ class AccountInvoice(models.Model):
         amount_total_company_signed = self.amount_total
         amount_untaxed_signed = self.amount_untaxed
         if self.currency_id and self.company_id and self.currency_id != self.company_id.currency_id:
-            currency_id = self.currency_id.with_context(date=self.date_invoice)
-            amount_total_company_signed = currency_id.compute(self.amount_total, self.company_id.currency_id)
-            amount_untaxed_signed = currency_id.compute(self.amount_untaxed, self.company_id.currency_id)
+            currency_id = self.currency_id
+            amount_total_company_signed = currency_id._convert(self.amount_total, self.company_id.currency_id, self.company_id, self.date_invoice or fields.Date.today())
+            amount_untaxed_signed = currency_id._convert(self.amount_untaxed, self.company_id.currency_id, self.company_id, self.date_invoice or fields.Date.today())
         sign = self.type in ['in_refund', 'out_refund'] and -1 or 1
         self.amount_total_company_signed = amount_total_company_signed * sign
         self.amount_total_signed = self.amount_total * sign
@@ -70,7 +70,7 @@ class AccountInvoice(models.Model):
     @api.onchange('amount_total')
     def _onchange_amount_total(self):
         for inv in self:
-            if inv.amount_total < 0:
+            if float_compare(inv.amount_total, 0.0, precision_rounding=inv.currency_id.rounding) == -1:
                 raise Warning(_('You cannot validate an invoice with a negative total amount. You should create a credit note instead.'))
 
     @api.model
@@ -114,8 +114,8 @@ class AccountInvoice(models.Model):
                 if line.currency_id == self.currency_id:
                     residual += line.amount_residual_currency if line.currency_id else line.amount_residual
                 else:
-                    from_currency = (line.currency_id and line.currency_id.with_context(date=line.date)) or line.company_id.currency_id.with_context(date=line.date)
-                    residual += from_currency.compute(line.amount_residual, self.currency_id)
+                    from_currency = line.currency_id or line.company_id.currency_id
+                    residual += from_currency._convert(line.amount_residual, self.currency_id, line.company_id, line.date or fields.Date.today())
         self.residual_company_signed = abs(residual_company_signed) * sign
         self.residual_signed = abs(residual) * sign
         self.residual = abs(residual)
@@ -145,7 +145,8 @@ class AccountInvoice(models.Model):
                     if line.currency_id and line.currency_id == self.currency_id:
                         amount_to_show = abs(line.amount_residual_currency)
                     else:
-                        amount_to_show = line.company_id.currency_id.with_context(date=line.date).compute(abs(line.amount_residual), self.currency_id)
+                        currency = line.company_id.currency_id
+                        amount_to_show = currency._convert(abs(line.amount_residual), self.currency_id, self.company_id, line.date or fields.Date.today())
                     if float_is_zero(amount_to_show, precision_rounding=self.currency_id.rounding):
                         continue
                     info['content'].append({
@@ -189,8 +190,8 @@ class AccountInvoice(models.Model):
             if payment_currency_id and payment_currency_id == self.currency_id:
                 amount_to_show = amount_currency
             else:
-                amount_to_show = payment.company_id.currency_id.with_context(date=self.date).compute(amount,
-                                                                                                        self.currency_id)
+                currency = payment.company_id.currency_id
+                amount_to_show = currency._convert(amount, self.currency_id, payment.company_id, self.date or fields.Date.today())
             if float_is_zero(amount_to_show, precision_rounding=self.currency_id.rounding):
                 continue
             payment_ref = payment.move_id.name
@@ -240,7 +241,7 @@ class AccountInvoice(models.Model):
             ('in_invoice','Vendor Bill'),
             ('out_refund','Customer Credit Note'),
             ('in_refund','Vendor Credit Note'),
-        ], readonly=True, index=True, change_default=True,
+        ], readonly=True, states={'draft': [('readonly', False)]}, index=True, change_default=True,
         default=lambda self: self._context.get('type', 'out_invoice'),
         track_visibility='always')
     access_token = fields.Char(
@@ -283,8 +284,10 @@ class AccountInvoice(models.Model):
              "term is not set on the invoice. If you keep the Payment terms and the due date empty, it "
              "means direct payment.")
     partner_id = fields.Many2one('res.partner', string='Partner', change_default=True,
-        required=True, readonly=True, states={'draft': [('readonly', False)]},
+        readonly=True, states={'draft': [('readonly', False)]},
         track_visibility='always')
+    vendor_bill_id = fields.Many2one('account.invoice', string='Vendor Bill',
+        help="Auto-complete from a past bill.")
     payment_term_id = fields.Many2one('account.payment.term', string='Payment Terms', oldname='payment_term',
         readonly=True, states={'draft': [('readonly', False)]},
         help="If you use payment terms, the due date will be computed automatically at the generation "
@@ -296,7 +299,7 @@ class AccountInvoice(models.Model):
         readonly=True, states={'draft': [('readonly', False)]})
 
     account_id = fields.Many2one('account.account', string='Account',
-        required=True, readonly=True, states={'draft': [('readonly', False)]},
+        readonly=True, states={'draft': [('readonly', False)]},
         domain=[('deprecated', '=', False)], help="The partner account used for this invoice.")
     invoice_line_ids = fields.One2many('account.invoice.line', 'invoice_id', string='Invoice Lines', oldname='invoice_line',
         readonly=True, states={'draft': [('readonly', False)]}, copy=True)
@@ -367,9 +370,37 @@ class AccountInvoice(models.Model):
     sequence_number_next = fields.Char(string='Next Number', compute="_get_sequence_number_next", inverse="_set_sequence_next")
     sequence_number_next_prefix = fields.Char(string='Next Number Prefix', compute="_get_sequence_prefix")
 
+    #fields related to vendor bills automated creation by email
+    source_email = fields.Char(string='Source Email', track_visibility='onchange')
+    vendor_display_name = fields.Char(compute='_get_vendor_display_info', store=True)  # store=True to enable sorting on that column
+    invoice_icon = fields.Char(compute='_get_vendor_display_info', store=False)
+
     _sql_constraints = [
         ('number_uniq', 'unique(number, company_id, journal_id, type)', 'Invoice Number must be unique per Company!'),
     ]
+
+    @api.depends('partner_id', 'source_email')
+    def _get_vendor_display_info(self):
+        for invoice in self:
+            vendor_display_name = invoice.partner_id.name
+            if not vendor_display_name and invoice.source_email:
+                vendor_display_name = _('From: ') + invoice.source_email
+            invoice.vendor_display_name = vendor_display_name
+            invoice.invoice_icon = invoice.source_email and '@' or ''
+
+    # Load all Vendor Bill lines
+    @api.onchange('vendor_bill_id')
+    def _onchange_vendor_bill(self):
+        if not self.vendor_bill_id:
+            return {}
+        self.currency_id = self.vendor_bill_id.currency_id
+        new_lines = self.env['account.invoice.line']
+        for line in self.vendor_bill_id.invoice_line_ids:
+            new_lines += new_lines.new(line._prepare_invoice_line())
+        self.invoice_line_ids += new_lines
+        self.payment_term_id = self.vendor_bill_id.payment_term_id
+        self.vendor_bill_id = False
+        return {}
 
     def _get_seq_number_next_stuff(self):
         self.ensure_one()
@@ -396,7 +427,7 @@ class AccountInvoice(models.Model):
         """ computes the prefix of the number that will be assigned to the first invoice/bill/refund of a journal, in order to
         let the user manually change it.
         """
-        if not self.env.user._is_admin():
+        if not self.env.user._is_system():
             for invoice in self:
                 invoice.sequence_number_next_prefix = False
                 invoice.sequence_number_next = ''
@@ -462,8 +493,6 @@ class AccountInvoice(models.Model):
                 for field in changed_fields:
                     if field not in vals and invoice[field]:
                         vals[field] = invoice._fields[field].convert_to_write(invoice[field], invoice)
-        if not vals.get('account_id',False):
-            raise UserError(_('Configuration error!\nCould not find any account to create the invoice, are you sure you have a chart of account installed?'))
 
         invoice = super(AccountInvoice, self.with_context(mail_create_nolog=True)).create(vals)
 
@@ -552,7 +581,10 @@ class AccountInvoice(models.Model):
         """
         self.ensure_one()
         self.sent = True
-        return self.env.ref('account.account_invoices').report_action(self)
+        if self.user_has_groups('account.group_account_invoice'):
+            return self.env.ref('account.account_invoices').report_action(self)
+        else:
+            return self.env.ref('account.account_invoices_without_payment').report_action(self)
 
     @api.multi
     def action_invoice_sent(self):
@@ -561,7 +593,7 @@ class AccountInvoice(models.Model):
         """
         self.ensure_one()
         template = self.env.ref('account.email_template_edi_invoice', False)
-        compose_form = self.env.ref('mail.email_compose_message_wizard_form', False)
+        compose_form = self.env.ref('account.multi_compose_message_wizard_form', False)
         ctx = dict(
             default_model='account.invoice',
             default_res_id=self.id,
@@ -569,7 +601,7 @@ class AccountInvoice(models.Model):
             default_template_id=template and template.id or False,
             default_composition_mode='comment',
             mark_invoice_as_sent=True,
-            custom_layout="mail.mail_notification_borders",
+            custom_layout="mail.mail_notification_paynow",
             force_email=True
         )
         return {
@@ -577,7 +609,7 @@ class AccountInvoice(models.Model):
             'type': 'ir.actions.act_window',
             'view_type': 'form',
             'view_mode': 'form',
-            'res_model': 'mail.compose.message',
+            'res_model': 'multi.compose.message',
             'views': [(compose_form.id, 'form')],
             'view_id': compose_form.id,
             'target': 'new',
@@ -589,7 +621,84 @@ class AccountInvoice(models.Model):
     def message_post(self, **kwargs):
         if self.env.context.get('mark_invoice_as_sent'):
             self.filtered(lambda inv: not inv.sent).write({'sent': True})
+            self.env.user.company_id.account_onboarding_sample_invoice_sent = True
         return super(AccountInvoice, self.with_context(mail_post_autofollow=True)).message_post(**kwargs)
+
+    @api.model
+    def message_new(self, msg_dict, custom_values=None):
+        """ Overrides mail_thread message_new(), called by the mailgateway through message_process,
+            to complete values for vendor bills created by mails.
+        """
+        # Split `From` and `CC` email address from received email to look for related partners to subscribe on the invoice
+        subscribed_emails = email_split((msg_dict.get('from') or '') + ',' + (msg_dict.get('cc') or ''))
+        subscribed_partner_ids = [pid for pid in self._find_partner_from_emails(subscribed_emails) if pid]
+
+        # Detection of the partner_id of the invoice:
+        # 1) check if the email_from correspond to a supplier
+        email_from = msg_dict.get('from') or ''
+        email_from = email_escape_char(email_split(email_from)[0])
+        partner_id = self._search_on_partner(email_from, extra_domain=[('supplier', '=', True)])
+
+        # 2) otherwise, if the email sender is from odoo internal users then it is likely that the vendor sent the bill
+        # by mail to the internal user who, inturn, forwarded that email to the alias to automatically generate the bill
+        # on behalf of the vendor.
+        if not partner_id:
+            user_partner_id = self._search_on_user(email_from)
+            if user_partner_id and user_partner_id in self.env.ref('base.group_user').users.mapped('partner_id').ids:
+                # In this case, we will look for the vendor's email address in email's body and assume if will come first
+                email_addresses = email_re.findall(msg_dict.get('body'))
+                if email_addresses:
+                    partner_ids = [pid for pid in self._find_partner_from_emails([email_addresses[0]], force_create=False) if pid]
+                    partner_id = partner_ids and partner_ids[0]
+            # otherwise, there's no fallback on the partner_id found for the regular author of the mail.message as we want
+            # the partner_id to stay empty
+
+        # If the partner_id can be found, subscribe it to the bill, otherwise it's left empty to be manually filled
+        if partner_id:
+            subscribed_partner_ids.append(partner_id)
+
+        # Find the right purchase journal based on the "TO" email address
+        destination_emails = email_split((msg_dict.get('to') or '') + ',' + (msg_dict.get('cc') or ''))
+        alias_names = [mail_to.split('@')[0] for mail_to in destination_emails]
+        journal = self.env['account.journal'].search([
+            ('type', '=', 'purchase'), ('alias_name', 'in', alias_names)
+        ], limit=1)
+
+        # Create the message and the bill.
+        values = dict(custom_values or {}, partner_id=partner_id, source_email=email_from)
+        if journal:
+            values['journal_id'] = journal.id
+        # Passing `type` in context so that _default_journal(...) can correctly set journal for new vendor bill
+        invoice = super(AccountInvoice, self.with_context(type=values.get('type'))).message_new(msg_dict, values)
+
+        # Subscribe people on the newly created bill
+        if subscribed_partner_ids:
+            invoice.message_subscribe(subscribed_partner_ids)
+        return invoice
+
+    @api.model
+    def complete_empty_list_help(self):
+        # add help message about email alias in vendor bills empty lists
+        Journal = self.env['account.journal']
+        journals = Journal.browse(self._context.get('default_journal_id')) or Journal.search([('type', '=', 'purchase')])
+
+        if journals:
+            links = ''
+            alias_count = 0
+            for journal in journals.filtered(lambda j: j.alias_domain and j.alias_id.alias_name):
+                email = format(journal.alias_id.alias_name) + "@" + format(journal.alias_domain)
+                links += "<a id='o_mail_test' href='mailto:{}'>{}</a>".format(email, email) + ", "
+                alias_count += 1
+            if links and alias_count == 1:
+                help_message = _('Or share the email %s to your vendors: bills will be created automatically upon mail reception.') % (links[:-2])
+            elif links:
+                help_message = _('Or share the emails %s to your vendors: bills will be created automatically upon mail reception.') % (links[:-2])
+            else:
+                help_message = _('''Or set an <a data-oe-id=%s data-oe-model="account.journal" href=#id=%s&model=account.journal>email alias</a> '''
+                                              '''to allow draft vendor bills to be created upon reception of an email.''') % (journals[0].id, journals[0].id)
+        else:
+            help_message = _('<p>You can control the invoice from your vendor based on what you purchased or received.</p>')
+        return help_message
 
     @api.multi
     def compute_taxes(self):
@@ -599,7 +708,8 @@ class AccountInvoice(models.Model):
         for invoice in self:
             # Delete non-manual tax lines
             self._cr.execute("DELETE FROM account_invoice_tax WHERE invoice_id=%s AND manual is False", (invoice.id,))
-            self.invalidate_cache()
+            if self._cr.rowcount:
+                self.invalidate_cache()
 
             # Generate one tax line per tax, however many invoice lines it's applied to
             tax_grouped = invoice.get_taxes_values()
@@ -778,10 +888,14 @@ class AccountInvoice(models.Model):
     def action_invoice_open(self):
         # lots of duplicate calls to action_invoice_open, so we remove those already open
         to_open_invoices = self.filtered(lambda inv: inv.state != 'open')
+        for inv in to_open_invoices.filtered(lambda inv: not inv.partner_id):
+            raise UserError(_("The field Vendor is required, please complete it to validate the Vendor Bill."))
         if to_open_invoices.filtered(lambda inv: inv.state != 'draft'):
             raise UserError(_("Invoice must be in draft state in order to validate it."))
-        if to_open_invoices.filtered(lambda inv: inv.amount_total < 0):
+        if to_open_invoices.filtered(lambda inv: float_compare(inv.amount_total, 0.0, precision_rounding=inv.currency_id.rounding) == -1):
             raise UserError(_("You cannot validate an invoice with a negative total amount. You should create a credit note instead."))
+        if to_open_invoices.filtered(lambda inv: not inv.account_id):
+            raise UserError(_('No account was found to create the invoice, be sure you have installed a chart of account.'))
         to_open_invoices.action_date_assign()
         to_open_invoices.action_move_create()
         return to_open_invoices.invoice_validate()
@@ -894,6 +1008,8 @@ class AccountInvoice(models.Model):
     def get_taxes_values(self):
         tax_grouped = {}
         for line in self.invoice_line_ids:
+            if not line.account_id:
+                continue
             price_unit = line.price_unit * (1 - (line.discount or 0.0) / 100.0)
             taxes = line.invoice_line_tax_ids.compute_all(price_unit, self.currency_id, line.quantity, line.product_id, self.partner_id)['taxes']
             for tax in taxes:
@@ -920,8 +1036,9 @@ class AccountInvoice(models.Model):
         self.ensure_one()
         credit_aml = self.env['account.move.line'].browse(credit_aml_id)
         if not credit_aml.currency_id and self.currency_id != self.company_id.currency_id:
+            amount_currency = self.company_id.currency_id._convert(credit_aml.balance, self.currency_id, self.company_id, credit_aml.date or fields.Date.today())
             credit_aml.with_context(allow_amount_currency=True, check_move_validity=False).write({
-                'amount_currency': self.company_id.currency_id.with_context(date=credit_aml.date).compute(credit_aml.balance, self.currency_id),
+                'amount_currency': amount_currency,
                 'currency_id': self.currency_id.id})
         if credit_aml.payment_id:
             credit_aml.payment_id.write({'invoice_ids': [(4, self.id, None)]})
@@ -952,11 +1069,12 @@ class AccountInvoice(models.Model):
         total_currency = 0
         for line in invoice_move_lines:
             if self.currency_id != company_currency:
-                currency = self.currency_id.with_context(date=self._get_currency_rate_date() or fields.Date.context_today(self))
+                currency = self.currency_id
+                date = self._get_currency_rate_date() or fields.Date.context_today(self)
                 if not (line.get('currency_id') and line.get('amount_currency')):
                     line['currency_id'] = currency.id
                     line['amount_currency'] = currency.round(line['price'])
-                    line['price'] = currency.compute(line['price'], company_currency)
+                    line['price'] = currency._convert(line['price'], company_currency, self.company_id, date)
             else:
                 line['currency_id'] = False
                 line['amount_currency'] = False
@@ -974,6 +1092,8 @@ class AccountInvoice(models.Model):
     def invoice_line_move_line_get(self):
         res = []
         for line in self.invoice_line_ids:
+            if not line.account_id:
+                continue
             if line.quantity==0:
                 continue
             tax_ids = []
@@ -1078,17 +1198,16 @@ class AccountInvoice(models.Model):
         for inv in self:
             if not inv.journal_id.sequence_id:
                 raise UserError(_('Please define sequence on the journal related to this invoice.'))
-            if not inv.invoice_line_ids:
-                raise UserError(_('Please create some invoice lines.'))
+            if not inv.invoice_line_ids.filtered(lambda line: line.account_id):
+                raise UserError(_('Please add at least one invoice line.'))
             if inv.move_id:
                 continue
 
-            ctx = dict(self._context, lang=inv.partner_id.lang)
 
             if not inv.date_invoice:
-                inv.with_context(ctx).write({'date_invoice': fields.Date.context_today(self)})
+                inv.write({'date_invoice': fields.Date.context_today(self)})
             if not inv.date_due:
-                inv.with_context(ctx).write({'date_due': inv.date_invoice})
+                inv.write({'date_due': inv.date_invoice})
             company_currency = inv.company_id.currency_id
 
             # create move lines (one per invoice line + eventual taxes and analytic lines)
@@ -1097,16 +1216,15 @@ class AccountInvoice(models.Model):
 
             diff_currency = inv.currency_id != company_currency
             # create one move line for the total and possibly adjust the other lines amount
-            total, total_currency, iml = inv.with_context(ctx).compute_invoice_totals(company_currency, iml)
+            total, total_currency, iml = inv.compute_invoice_totals(company_currency, iml)
 
             name = inv.name or '/'
             if inv.payment_term_id:
-                totlines = inv.with_context(ctx).payment_term_id.with_context(currency_id=company_currency.id).compute(total, inv.date_invoice)[0]
+                totlines = inv.payment_term_id.with_context(currency_id=company_currency.id).compute(total, inv.date_invoice)[0]
                 res_amount_currency = total_currency
-                ctx['date'] = inv._get_currency_rate_date()
                 for i, t in enumerate(totlines):
                     if inv.currency_id != company_currency:
-                        amount_currency = company_currency.with_context(ctx).compute(t[1], inv.currency_id)
+                        amount_currency = company_currency._convert(t[1], inv.currency_id, inv.company_id, inv._get_currency_rate_date() or fields.Date.today())
                     else:
                         amount_currency = False
 
@@ -1140,32 +1258,27 @@ class AccountInvoice(models.Model):
             line = [(0, 0, self.line_get_convert(l, part.id)) for l in iml]
             line = inv.group_lines(iml, line)
 
-            journal = inv.journal_id.with_context(ctx)
             line = inv.finalize_invoice_move_lines(line)
 
             date = inv.date or inv.date_invoice
             move_vals = {
                 'ref': inv.reference,
                 'line_ids': line,
-                'journal_id': journal.id,
+                'journal_id': inv.journal_id.id,
                 'date': date,
                 'narration': inv.comment,
             }
-            ctx['company_id'] = inv.company_id.id
-            ctx['invoice'] = inv
-            ctx_nolang = ctx.copy()
-            ctx_nolang.pop('lang', None)
-            move = account_move.with_context(ctx_nolang).create(move_vals)
-            # Pass invoice in context in method post: used if you want to get the same
+            move = account_move.create(move_vals)
+            # Pass invoice in method post: used if you want to get the same
             # account move reference when creating the same invoice after a cancelled one:
-            move.post()
+            move.post(invoice = inv)
             # make the invoice point to that move
             vals = {
                 'move_id': move.id,
                 'date': date,
                 'move_name': move.name,
             }
-            inv.with_context(ctx).write(vals)
+            inv.write(vals)
         return True
 
     @api.constrains('cash_rounding_id', 'tax_line_ids')
@@ -1234,14 +1347,14 @@ class AccountInvoice(models.Model):
         return result
 
     @api.model
-    def name_search(self, name, args=None, operator='ilike', limit=100):
+    def _name_search(self, name, args=None, operator='ilike', limit=100, name_get_uid=None):
         args = args or []
-        recs = self.browse()
+        invoice_ids = []
         if name:
-            recs = self.search([('number', '=', name)] + args, limit=limit)
-        if not recs:
-            recs = self.search([('name', operator, name)] + args, limit=limit)
-        return recs.name_get()
+            invoice_ids = self._search([('number', '=', name)] + args, limit=limit, access_rights_uid=name_get_uid)
+        if not invoice_ids:
+            invoice_ids = self._search([('name', operator, name)] + args, limit=limit, access_rights_uid=name_get_uid)
+        return self.browse(invoice_ids).name_get()
 
     @api.model
     def _refund_cleanup_lines(self, lines):
@@ -1346,7 +1459,7 @@ class AccountInvoice(models.Model):
             refund_invoice = self.create(values)
             invoice_type = {'out_invoice': ('customer invoices credit note'),
                 'in_invoice': ('vendor bill credit note')}
-            message = _("This %s has been created from: <a href=# data-oe-model=account.invoice data-oe-id=%d>%s</a>") % (invoice_type[invoice.type], invoice.id, invoice.number)
+            message = _("This %s has been created from: <a href=# data-oe-model=account.invoice data-oe-id=%d>%s</a><br>Reason: %s") % (invoice_type[invoice.type], invoice.id, invoice.number, description)
             refund_invoice.message_post(body=message)
             new_invoices += refund_invoice
         return new_invoices
@@ -1370,8 +1483,6 @@ class AccountInvoice(models.Model):
         else:
             payment_method = self.env.ref('account.account_payment_method_manual_out')
             journal_payment_methods = pay_journal.outbound_payment_method_ids
-        if payment_method not in journal_payment_methods:
-            raise UserError(_('No appropriate payment method enabled on journal %s') % pay_journal.name)
 
         communication = self.type in ('in_invoice', 'in_refund') and self.reference or self.number
         if self.origin:
@@ -1443,7 +1554,9 @@ class AccountInvoiceLine(models.Model):
         self.price_subtotal = price_subtotal_signed = taxes['total_excluded'] if taxes else self.quantity * price
         self.price_total = taxes['total_included'] if taxes else self.price_subtotal
         if self.invoice_id.currency_id and self.invoice_id.currency_id != self.invoice_id.company_id.currency_id:
-            price_subtotal_signed = self.invoice_id.currency_id.with_context(date=self.invoice_id._get_currency_rate_date()).compute(price_subtotal_signed, self.invoice_id.company_id.currency_id)
+            currency = self.invoice_id.currency_id
+            date = self.invoice_id._get_currency_rate_date()
+            price_subtotal_signed = currency._convert(price_subtotal_signed, self.invoice_id.company_id.currency_id, self.company_id or self.env.user.company_id, date or fields.Date.today())
         sign = self.invoice_id.type in ['in_refund', 'out_refund'] and -1 or 1
         self.price_subtotal_signed = price_subtotal_signed * sign
 
@@ -1467,8 +1580,7 @@ class AccountInvoiceLine(models.Model):
     product_id = fields.Many2one('product.product', string='Product',
         ondelete='restrict', index=True)
     product_image = fields.Binary('Product Image', related="product_id.image", store=False)
-    account_id = fields.Many2one('account.account', string='Account',
-        required=True, domain=[('deprecated', '=', False)],
+    account_id = fields.Many2one('account.account', string='Account', domain=[('deprecated', '=', False)],
         default=_default_account,
         help="The income or expense account related to the selected product.")
     price_unit = fields.Float(string='Unit Price', required=True, digits=dp.get_precision('Product Price'))
@@ -1497,6 +1609,10 @@ class AccountInvoiceLine(models.Model):
     company_currency_id = fields.Many2one('res.currency', related='invoice_id.company_currency_id', readonly=True, related_sudo=False)
     is_rounding_line = fields.Boolean(string='Rounding Line', help='Is a rounding line in case of cash rounding.')
 
+    display_type = fields.Selection([
+        ('line_section', "Section"),
+        ('line_note', "Note")], default=False, help="Technical field for UX purpose.")
+
     @api.model
     def fields_view_get(self, view_id=None, view_type='form', toolbar=False, submenu=False):
         res = super(AccountInvoiceLine, self).fields_view_get(
@@ -1521,6 +1637,13 @@ class AccountInvoiceLine(models.Model):
             return accounts['income']
         return accounts['expense']
 
+    def _set_currency(self):
+        company = self.invoice_id.company_id
+        currency = self.invoice_id.currency_id
+        if company and currency:
+            if company.currency_id != currency:
+                self.price_unit = self.price_unit * currency.with_context(dict(self._context or {}, date=self.invoice_id.date_invoice)).rate
+
     def _set_taxes(self):
         """ Used in on_change to set taxes and price."""
         if self.invoice_id.type in ('out_invoice', 'out_refund'):
@@ -1539,8 +1662,10 @@ class AccountInvoiceLine(models.Model):
             prec = self.env['decimal.precision'].precision_get('Product Price')
             if not self.price_unit or float_compare(self.price_unit, self.product_id.standard_price, precision_digits=prec) == 0:
                 self.price_unit = fix_price(self.product_id.standard_price, taxes, fp_taxes)
+                self._set_currency()
         else:
             self.price_unit = fix_price(self.product_id.lst_price, taxes, fp_taxes)
+            self._set_currency()
 
     @api.onchange('product_id')
     def _onchange_product_id(self):
@@ -1557,7 +1682,7 @@ class AccountInvoiceLine(models.Model):
         if not part:
             warning = {
                     'title': _('Warning!'),
-                    'message': _('You must first select a partner!'),
+                    'message': _('You must first select a partner.'),
                 }
             return {'warning': warning}
 
@@ -1589,8 +1714,6 @@ class AccountInvoiceLine(models.Model):
             domain['uom_id'] = [('category_id', '=', product.uom_id.category_id.id)]
 
             if company and currency:
-                if company.currency_id != currency:
-                    self.price_unit = self.price_unit * currency.with_context(dict(self._context or {}, date=self.invoice_id.date_invoice)).rate
 
                 if self.uom_id and self.uom_id.id != product.uom_id.id:
                     self.price_unit = product.uom_id._compute_price(self.price_unit, self.uom_id)
@@ -1623,7 +1746,7 @@ class AccountInvoiceLine(models.Model):
             if self.product_id.uom_id.category_id.id != self.uom_id.category_id.id:
                 warning = {
                     'title': _('Warning!'),
-                    'message': _('The selected unit of measure is not compatible with the unit of measure of the product.'),
+                    'message': _('The selected unit of measure has to be in the same category as the product unit of measure.'),
                 }
                 self.uom_id = self.product_id.uom_id.id
         if warning:
@@ -1646,6 +1769,46 @@ class AccountInvoiceLine(models.Model):
         if self.filtered(lambda r: r.invoice_id and r.invoice_id.state != 'draft'):
             raise UserError(_('You can only delete an invoice line if the invoice is in draft state.'))
         return super(AccountInvoiceLine, self).unlink()
+
+    def _prepare_invoice_line(self):
+        data = {
+            'name': self.name,
+            'origin': self.origin,
+            'uom_id': self.uom_id.id,
+            'product_id': self.product_id.id,
+            'account_id': self.account_id.id,
+            'price_unit': self.price_unit,
+            'quantity': self.quantity,
+            'discount': self.discount,
+            'account_analytic_id': self.account_analytic_id.id,
+            'analytic_tag_ids': self.analytic_tag_ids.ids,
+            'invoice_line_tax_ids': self.invoice_line_tax_ids.ids
+        }
+        return data
+
+    @api.model
+    def create(self, vals):
+        if vals.get('display_type', self.default_get(['display_type'])['display_type']):
+            vals.update(price_unit=0, account_id=False, quantity=0)
+
+        return super(AccountInvoiceLine, self).create(vals)
+
+    @api.multi
+    def write(self, values):
+        if 'display_type' in values and self.filtered(lambda line: line.display_type != values.get('display_type')):
+            raise UserError("You cannot change the type of an invoice line. Instead you should delete the current line and create a new line of the proper type.")
+        return super(AccountInvoiceLine, self).write(values)
+
+    _sql_constraints = [
+        ('accountable_required_fields',
+            "CHECK(display_type IS NOT NULL OR account_id IS NOT NULL)",
+            "Missing required account on accountable invoice line."),
+
+        ('non_accountable_fields_null',
+            "CHECK(display_type IS NULL OR (price_unit = 0 AND account_id IS NULL and quantity = 0))",
+            "Forbidden unit price, account and quantity on non-accountable invoice line"),
+    ]
+
 
 class AccountInvoiceTax(models.Model):
     _name = "account.invoice.tax"
@@ -1712,10 +1875,10 @@ class AccountPaymentTerm(models.Model):
     def _check_lines(self):
         payment_term_lines = self.line_ids.sorted()
         if payment_term_lines and payment_term_lines[-1].value != 'balance':
-            raise ValidationError(_('A Payment Terms should have its last line of type Balance.'))
+            raise ValidationError(_('The last line of a Payment Term should have the Balance type.'))
         lines = self.line_ids.filtered(lambda r: r.value == 'balance')
         if len(lines) > 1:
-            raise ValidationError(_('A Payment Terms should have only one line of type Balance.'))
+            raise ValidationError(_('A Payment Term should have only one line of type Balance.'))
 
     @api.one
     def compute(self, value, date_ref=False):
@@ -1795,7 +1958,7 @@ class AccountPaymentTermLine(models.Model):
     @api.constrains('value', 'value_amount')
     def _check_percent(self):
         if self.value == 'percent' and (self.value_amount < 0.0 or self.value_amount > 100.0):
-            raise ValidationError(_('Percentages for Payment Terms Line must be between 0 and 100.'))
+            raise ValidationError(_('Percentages on the Payment Terms lines must be between 0 and 100.'))
 
     @api.one
     @api.constrains('days')

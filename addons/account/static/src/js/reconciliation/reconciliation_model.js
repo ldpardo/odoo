@@ -519,7 +519,6 @@ var StatementModel = BasicModel.extend({
     },
     /**
      * Force the partial reconciliation to display the reconciliate button.
-     * This method should only  be called when there is onely one proposition.
      *
      * @param {string} handle
      * @returns {Deferred}
@@ -529,14 +528,17 @@ var StatementModel = BasicModel.extend({
 
         // Retrieve the toggle proposition
         var selected;
-        _.each(line.reconciliation_proposition, function (prop) {
+        var targetLineAmount = line.st_line.amount;
+        line.reconciliation_proposition.every(function (prop) {
             if (!prop.invalid) {
-                if (((line.balance.amount < 0 || !line.partial_reconcile) && prop.amount > 0 && line.st_line.amount > 0 && line.st_line.amount < prop.amount) ||
-                    ((line.balance.amount > 0 || !line.partial_reconcile) && prop.amount < 0 && line.st_line.amount < 0 && line.st_line.amount > prop.amount)) {
+                if (((line.balance.amount < 0 || !line.partial_reconcile) && prop.amount > 0 && targetLineAmount > 0 && targetLineAmount < prop.amount) ||
+                    ((line.balance.amount > 0 || !line.partial_reconcile) && prop.amount < 0 && targetLineAmount < 0 && targetLineAmount > prop.amount)) {
                     selected = prop;
                     return false;
                 }
+            targetLineAmount -= prop.amount;
             }
+            return true;
         });
 
         // If no toggled proposition found, reject it
@@ -642,7 +644,7 @@ var StatementModel = BasicModel.extend({
         var values = [];
         _.each(handles, function (handle) {
             var line = self.getLine(handle);
-            var props = _.filter(line.reconciliation_proposition, function (prop) {return !prop.is_tax && !prop.invalid;});
+            var props = _.filter(line.reconciliation_proposition, function (prop) {return !prop.invalid;});
             if (props.length === 0) {
                 // Usability: if user has not choosen any lines and click validate, it has the same behavior
                 // as creating a write-off of the same amount.
@@ -804,12 +806,13 @@ var StatementModel = BasicModel.extend({
                         model: 'account.tax',
                         method: 'json_friendly_compute_all',
                         args: args,
+                        context: $.extend(self.context || {}, {'round': true}),
                     })
                     .then(function (result) {
                         _.each(result.taxes, function(tax){
                             var tax_prop = self._formatQuickCreate(line, {
                                 'link': prop.id,
-                                'tax_id': tax.id,
+                                'tax_id': [tax.id, null],
                                 'amount': tax.amount,
                                 'label': tax.name,
                                 'account_id': tax.account_id ? [tax.account_id, null] : prop.account_id,
@@ -818,8 +821,6 @@ var StatementModel = BasicModel.extend({
                                 '__focus': false
                             });
 
-                            prop.computed_with_tax = tax.price_include
-                            prop.tax_amount = tax.amount
                             prop.amount = tax.base;
                             prop.amount_str = field_utils.format.monetary(Math.abs(prop.amount), {}, formatOptions);
                             prop.invalid = !self._isValid(prop);
@@ -867,7 +868,7 @@ var StatementModel = BasicModel.extend({
                 }) : false,
                 account_code: self.accounts[line.st_line.open_balance_account_id],
             };
-            line.balance.type = line.balance.amount_currency ? (line.balance.amount_currency > 0 && line.st_line.partner_id ? 0 : -1) : 1;
+            line.balance.type = line.balance.amount_currency ? (line.st_line.partner_id ? 0 : -1) : 1;
         });
     },
     /**
@@ -990,6 +991,7 @@ var StatementModel = BasicModel.extend({
         var formatOptions = {
             currency_id: line.st_line.currency_id,
         };
+        var amount = values.amount !== undefined ? values.amount : line.balance.amount;
         var prop = {
             'id': _.uniqueId('createLine'),
             'label': values.label || line.st_line.name,
@@ -1002,8 +1004,7 @@ var StatementModel = BasicModel.extend({
             'debit': 0,
             'credit': 0,
             'base_amount': values.amount_type !== "percentage" ?
-                (values.amount || line.balance.amount) :
-                line.balance.amount * values.amount / 100,
+                (amount) : line.balance.amount * values.amount / 100,
             'percent': values.amount_type === "percentage" ? values.amount : null,
             'link': values.link,
             'display': true,
@@ -1096,8 +1097,7 @@ var StatementModel = BasicModel.extend({
      * @returns {object}
      */
     _formatToProcessReconciliation: function (line, prop) {
-        // Do not forward port in master. @CSN will change this
-        var amount = prop.computed_with_tax && -prop.base_amount || -prop.amount;
+        var amount = -prop.amount;
         if (prop.partial_reconcile === true) {
             amount = -prop.write_off_amount;
         }
@@ -1106,10 +1106,6 @@ var StatementModel = BasicModel.extend({
             name : prop.label,
             debit : amount > 0 ? amount : 0,
             credit : amount < 0 ? -amount : 0,
-            // This one isn't usefull for the server,
-            // But since we need to change the amount (and thus its semantics) into base_amount
-            // It might be useful to have a trace in the RPC for debugging purposes
-            computed_with_tax: prop.computed_with_tax,
             analytic_tag_ids: [[6, null, _.pluck(prop.analytic_tag_ids, 'id')]]
         };
         if (!isNaN(prop.id)) {
@@ -1122,7 +1118,8 @@ var StatementModel = BasicModel.extend({
         }
         if (!isNaN(prop.id)) result.counterpart_aml_id = prop.id;
         if (prop.analytic_account_id) result.analytic_account_id = prop.analytic_account_id.id;
-        if (prop.tax_id) result.tax_ids = [[4, prop.tax_id.id, null]];
+        if (prop.tax_id && !prop.is_tax) result.tax_ids = [[4, prop.tax_id.id, null]];
+        if (prop.tax_id && prop.is_tax) result.tax_line_id = prop.tax_id.id;
         return result;
     },
 });
@@ -1401,6 +1398,22 @@ var ManualModel = StatementModel.extend({
                 prop.journal_id = self._formatNameGet(prop.journal_id || line.journal_id);
             });
         }
+    },
+    /**
+     * override to add journal_id on tax_created_line
+     *
+     * @private
+     * @param {Object} line
+     * @param {Object} values
+     * @returns {Object}
+     */
+    _formatQuickCreate: function (line, values) {
+        var self = this;
+        // Add journal to created line
+        if (values && values.journal_id === undefined && line && line.createForm && line.createForm.journal_id) {
+            values.journal_id = line.createForm.journal_id;
+        }
+        return this._super(line, values)
     },
     /**
      * @override

@@ -51,7 +51,7 @@ class ProductCategory(models.Model):
     @api.constrains('parent_id')
     def _check_category_recursion(self):
         if not self._check_recursion():
-            raise ValidationError(_('Error ! You cannot create recursive categories.'))
+            raise ValidationError(_('You cannot create recursive categories.'))
         return True
 
     @api.model
@@ -147,6 +147,9 @@ class ProductProduct(models.Model):
         ('barcode_uniq', 'unique(barcode)', "A barcode can only be assigned to one product !"),
     ]
 
+    def _get_invoice_policy(self):
+        return False
+
     def _compute_product_price(self):
         prices = {}
         pricelist_id_or_name = self._context.get('pricelist')
@@ -217,6 +220,7 @@ class ProductProduct(models.Model):
         for supplier_info in self.seller_ids:
             if supplier_info.name.id == self._context.get('partner_id'):
                 self.code = supplier_info.product_code or self.default_code
+                break
         else:
             self.code = self.default_code
 
@@ -225,9 +229,10 @@ class ProductProduct(models.Model):
         for supplier_info in self.seller_ids:
             if supplier_info.name.id == self._context.get('partner_id'):
                 product_name = supplier_info.product_name or self.default_code
+                self.partner_ref = '%s%s' % (self.code and '[%s] ' % self.code or '', product_name)
+                break
         else:
-            product_name = self.name
-        self.partner_ref = '%s%s' % (self.code and '[%s] ' % self.code or '', product_name)
+            self.partner_ref = self.name_get()[0][1]
 
     @api.one
     @api.depends('image_variant', 'product_tmpl_id.image')
@@ -293,13 +298,14 @@ class ProductProduct(models.Model):
         if self.uom_id and self.uom_po_id and self.uom_id.category_id != self.uom_po_id.category_id:
             self.uom_po_id = self.uom_id
 
-    @api.model
-    def create(self, vals):
-        product = super(ProductProduct, self.with_context(create_product_product=True)).create(vals)
-        # When a unique variant is created from tmpl then the standard price is set by _set_standard_price
-        if not (self.env.context.get('create_from_tmpl') and len(product.product_tmpl_id.product_variant_ids) == 1):
-            product._set_standard_price(vals.get('standard_price') or 0.0)
-        return product
+    @api.model_create_multi
+    def create(self, vals_list):
+        products = super(ProductProduct, self.with_context(create_product_product=True)).create(vals_list)
+        for product, vals in pycompat.izip(products, vals_list):
+            # When a unique variant is created from tmpl then the standard price is set by _set_standard_price
+            if not (self.env.context.get('create_from_tmpl') and len(product.product_tmpl_id.product_variant_ids) == 1):
+                product._set_standard_price(vals.get('standard_price') or 0.0)
+        return products
 
     @api.multi
     def write(self, values):
@@ -343,11 +349,11 @@ class ProductProduct(models.Model):
         return super(ProductProduct, self).copy(default=default)
 
     @api.model
-    def search(self, args, offset=0, limit=None, order=None, count=False):
+    def _search(self, args, offset=0, limit=None, order=None, count=False, access_rights_uid=None):
         # TDE FIXME: strange
         if self._context.get('search_default_categ_id'):
             args.append((('categ_id', 'child_of', self._context['search_default_categ_id'])))
-        return super(ProductProduct, self).search(args, offset=offset, limit=limit, order=order, count=count)
+        return super(ProductProduct, self)._search(args, offset=offset, limit=limit, order=order, count=count, access_rights_uid=access_rights_uid)
 
     @api.multi
     def name_get(self):
@@ -406,45 +412,51 @@ class ProductProduct(models.Model):
         return result
 
     @api.model
-    def name_search(self, name='', args=None, operator='ilike', limit=100):
+    def _name_search(self, name, args=None, operator='ilike', limit=100, name_get_uid=None):
         if not args:
             args = []
         if name:
             positive_operators = ['=', 'ilike', '=ilike', 'like', '=like']
-            products = self.env['product.product']
+            product_ids = []
             if operator in positive_operators:
-                products = self.search([('default_code', '=', name)] + args, limit=limit)
-                if not products:
-                    products = self.search([('barcode', '=', name)] + args, limit=limit)
-            if not products and operator not in expression.NEGATIVE_TERM_OPERATORS:
+                product_ids = self._search([('default_code', '=', name)] + args, limit=limit, access_rights_uid=name_get_uid)
+                if not product_ids:
+                    product_ids = self._search([('barcode', '=', name)] + args, limit=limit, access_rights_uid=name_get_uid)
+            if not product_ids and operator not in expression.NEGATIVE_TERM_OPERATORS:
                 # Do not merge the 2 next lines into one single search, SQL search performance would be abysmal
                 # on a database with thousands of matching products, due to the huge merge+unique needed for the
                 # OR operator (and given the fact that the 'name' lookup results come from the ir.translation table
                 # Performing a quick memory merge of ids in Python will give much better performance
-                products = self.search(args + [('default_code', operator, name)], limit=limit)
-                if not limit or len(products) < limit:
+                product_ids = self._search(args + [('default_code', operator, name)], limit=limit)
+                if not limit or len(product_ids) < limit:
                     # we may underrun the limit because of dupes in the results, that's fine
-                    limit2 = (limit - len(products)) if limit else False
-                    products += self.search(args + [('name', operator, name), ('id', 'not in', products.ids)], limit=limit2)
-            elif not products and operator in expression.NEGATIVE_TERM_OPERATORS:
-                products = self.search(args + ['&', ('default_code', operator, name), ('name', operator, name)], limit=limit)
-            if not products and operator in positive_operators:
+                    limit2 = (limit - len(product_ids)) if limit else False
+                    product2_ids = self._search(args + [('name', operator, name), ('id', 'not in', product_ids)], limit=limit2, access_rights_uid=name_get_uid)
+                    product_ids.extend(product2_ids)
+            elif not product_ids and operator in expression.NEGATIVE_TERM_OPERATORS:
+                domain = expression.OR([
+                    ['&', ('default_code', operator, name), ('name', operator, name)],
+                    ['&', ('default_code', '=', False), ('name', operator, name)],
+                ])
+                domain = expression.AND([args, domain])
+                product_ids = self._search(domain, limit=limit, access_rights_uid=name_get_uid)
+            if not product_ids and operator in positive_operators:
                 ptrn = re.compile('(\[(.*?)\])')
                 res = ptrn.search(name)
                 if res:
-                    products = self.search([('default_code', '=', res.group(2))] + args, limit=limit)
+                    product_ids = self._search([('default_code', '=', res.group(2))] + args, limit=limit, access_rights_uid=name_get_uid)
             # still no results, partner in context: search on supplier info as last hope to find something
-            if not products and self._context.get('partner_id'):
-                suppliers = self.env['product.supplierinfo'].search([
+            if not product_ids and self._context.get('partner_id'):
+                suppliers_ids = self.env['product.supplierinfo']._search([
                     ('name', '=', self._context.get('partner_id')),
                     '|',
                     ('product_code', operator, name),
-                    ('product_name', operator, name)])
-                if suppliers:
-                    products = self.search([('product_tmpl_id.seller_ids', 'in', suppliers.ids)], limit=limit)
+                    ('product_name', operator, name)], access_rights_uid=name_get_uid)
+                if suppliers_ids:
+                    product_ids = self._search([('product_tmpl_id.seller_ids', 'in', suppliers_ids)], limit=limit, access_rights_uid=name_get_uid)
         else:
-            products = self.search(args, limit=limit)
-        return products.name_get()
+            product_ids = self._search(args, limit=limit, access_rights_uid=name_get_uid)
+        return self.browse(product_ids).name_get()
 
     @api.model
     def view_header_get(self, view_id, view_type):
@@ -523,7 +535,8 @@ class ProductProduct(models.Model):
             # Convert from current user company currency to asked one
             # This is right cause a field cannot be in more than one currency
             if currency:
-                prices[product.id] = product.currency_id.compute(prices[product.id], currency)
+                prices[product.id] = product.currency_id._convert(
+                    prices[product.id], currency, product.company_id, fields.Date.today())
 
         return prices
 
@@ -618,3 +631,10 @@ class SupplierInfo(models.Model):
     delay = fields.Integer(
         'Delivery Lead Time', default=1, required=True,
         help="Lead time in days between the confirmation of the purchase order and the receipt of the products in your warehouse. Used by the scheduler for automatic computation of the purchase order planning.")
+
+    @api.model
+    def get_import_templates(self):
+        return [{
+            'label': _('Import Template for Vendor Pricelists'),
+            'template': '/product/static/xls/product_supplierinfo.xls'
+        }]

@@ -77,6 +77,7 @@ var createActionManager = function (params) {
     var $target = $('#qunit-fixture');
     if (params.debug) {
         $target = $('body');
+        $target.addClass('debug');
     }
 
     var widget = new Widget();
@@ -99,6 +100,9 @@ var createActionManager = function (params) {
     addMockEnvironment(widget, _.defaults(params, {debounce: false}));
     widget.appendTo($target);
     widget.$el.addClass('o_web_client');
+    if (config.device.isMobile) {
+        widget.$el.addClass('o_touch_device');
+    }
 
     var userContext = params.context && params.context.user_context || {};
     var actionManager = new ActionManager(widget, userContext);
@@ -285,6 +289,9 @@ function createAsyncView(params) {
  *   up in the init process of the view, because there are no other way to do it
  *   after this method returns. Some events ('call_service', "load_views",
  *   "get_session", "load_filters") have a special treatment beforehand.
+ * @param {web.AbstractService[]} [params.services] list of services to load in
+ *   addition to the ajax service. For instance, if a test needs the local
+ *   storage service in order to work, it can provide a mock version of it.
  * @param {boolean} [debounce=true] set to false to completely remove the
  *   debouncing, forcing the handler to be called directly (not on the next
  *   execution stack, like it does with delay=0).
@@ -311,6 +318,7 @@ function addMockEnvironment(widget, params) {
         archs: params.archs,
         currentDate: params.currentDate,
         debug: params.debug,
+        services: params.services,
     });
 
     // make sure images do not trigger a GET on the server
@@ -427,6 +435,7 @@ function addMockEnvironment(widget, params) {
         if (index !== -1) {
             var Service = params.services.splice(index, 1)[0];
             services[Service.prototype.name] = new Service(widget);
+            services[Service.prototype.name].start();
         } else {
             done = true;
         }
@@ -729,53 +738,6 @@ function patch (target, props) {
         });
     }
 }
-/**
- * In Phantomjs, there is a crash when calling window.getSelection
- * in order for the tests to work, for the specific test that uses it, replace
- * the default window.getSelection by a mock
- * 
- * usage:
- *     QUnit.test('...',function(done){
- *          var unpatchWindowGetSelection = testUtils.patchWindowGetSelection();
- *          
- *          // do something that needs to use window.getSelection()
- *          assert.strictEqual(....);
- *          
- *          // restore the original function
- *          unpatchWindowGetSelection();
- *      
- *          // finish the test
- *          done();
- *     })
- *
- * @returns {function} the unpatch function
- */
-function patchWindowGetSelection() {
-    var originalWindowGetSelection = window.getSelection;
-    window.getSelection = function () {
-        return {
-            removeAllRanges: function () {},
-            addRange: function (range) {},
-            getRangeAt: function (index) {
-                return {
-                    startOffset : 0
-                };
-            },
-            anchorNode: {
-                parentNode: {
-                    childNodes: [{
-                        outerHTML: "@",
-                        nodeType: 3,
-                        textContent: '@',
-                    }],
-                },
-            },
-        };
-    };
-    return function () {
-        window.getSelection = originalWindowGetSelection;
-    };
-}
 
 /**
  * Unpatches a given Class or Object.
@@ -827,7 +789,6 @@ return $.when(
         intercept: intercept,
         observe: observe,
         patch: patch,
-        patchWindowGetSelection: patchWindowGetSelection,
         removeSrcAttribute: removeSrcAttribute,
         triggerKeypressEvent: triggerKeypressEvent,
         triggerMouseEvent: triggerMouseEvent,

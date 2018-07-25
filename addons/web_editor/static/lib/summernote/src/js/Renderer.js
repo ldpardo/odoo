@@ -94,18 +94,18 @@ define([
      * @param {String} [footer='']
      */
     var tplDialog = function (className, title, body, footer) {
-      return '<div class="' + className + ' modal" aria-hidden="false">' +
+      return '<div class="' + className + ' modal" role="dialog" aria-hidden="false">' +
                '<div class="modal-dialog">' +
                  '<div class="modal-content">' +
                    (title ?
-                   '<div class="modal-header">' +
+                   '<header class="modal-header">' +
                      '<button type="button" class="close" aria-hidden="true" tabindex="-1">&times;</button>' +
                      '<h4 class="modal-title">' + title + '</h4>' +
-                   '</div>' : ''
+                   '</header>' : ''
                    ) +
-                   '<div class="modal-body">' + body + '</div>' +
+                   '<main class="modal-body">' + body + '</main>' +
                    (footer ?
-                   '<div class="modal-footer">' + footer + '</div>' : ''
+                   '<header class="modal-footer">' + footer + '</header>' : ''
                    ) +
                  '</div>' +
                '</div>' +

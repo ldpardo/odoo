@@ -46,9 +46,11 @@ class PosOrder(models.Model):
         }
 
     def _payment_fields(self, ui_paymentline):
+        payment_date = ui_paymentline['name']
+        payment_date = fields.Date.context_today(self, fields.Datetime.from_string(payment_date))
         return {
             'amount':       ui_paymentline['amount'] or 0.0,
-            'payment_date': ui_paymentline['name'],
+            'payment_date': payment_date,
             'statement_id': ui_paymentline['statement_id'],
             'payment_name': ui_paymentline.get('note', False),
             'journal':      ui_paymentline['journal_id'],
@@ -174,7 +176,7 @@ class PosOrder(models.Model):
             'comment': self.note or '',
             # considering partner's sale pricelist's currency
             'currency_id': self.pricelist_id.currency_id.id,
-            'user_id': self.env.uid,
+            'user_id': self.user_id.id,
         }
 
     @api.model
@@ -259,7 +261,7 @@ class PosOrder(models.Model):
                     line = grouped_data[product_key][0]
                     product = Product.browse(line['product_id'])
                     # In the SO part, the entries will be inverted by function compute_invoice_totals
-                    price_unit = - product._get_anglo_saxon_price_unit()
+                    price_unit = self._get_pos_anglo_saxon_price_unit(product, line['partner_id'], line['quantity'])
                     account_analytic = Analytic.browse(line.get('analytic_account_id'))
                     res = Product._anglo_saxon_sale_move_lines(
                         line['name'], product, product.uom_id, line['quantity'], price_unit,
@@ -413,6 +415,18 @@ class PosOrder(models.Model):
             move.sudo().post()
         return True
 
+    def _get_pos_anglo_saxon_price_unit(self, product, partner_id, quantity):
+        price_unit = product._get_anglo_saxon_price_unit()
+        if product._get_invoice_policy() == "delivery":
+            moves = self.filtered(lambda o: o.partner_id.id == partner_id)\
+                .mapped('picking_id.move_lines')\
+                .filtered(lambda m: m.product_id.id == product.id)\
+                .sorted(lambda x: x.date)
+            average_price_unit = product._compute_average_price(0, quantity, moves)
+            price_unit = average_price_unit or price_unit
+        # In the SO part, the entries will be inverted by function compute_invoice_totals
+        return - price_unit
+
     def _reconcile_payments(self):
         for order in self:
             aml = order.statement_ids.mapped('journal_entry_ids') | order.account_move.line_ids | order.invoice_id.move_id.line_ids
@@ -465,6 +479,7 @@ class PosOrder(models.Model):
         domain="[('state', '=', 'opened')]", states={'draft': [('readonly', False)]},
         readonly=True, default=_default_session)
     config_id = fields.Many2one('pos.config', related='session_id.config_id', string="Point of Sale")
+    invoice_group = fields.Boolean(related="config_id.module_account_invoicing")
     state = fields.Selection(
         [('draft', 'New'), ('cancel', 'Cancelled'), ('paid', 'Paid'), ('done', 'Posted'), ('invoiced', 'Invoiced')],
         'Status', readonly=True, copy=False, default='draft')
@@ -734,7 +749,6 @@ class PosOrder(models.Model):
             # when the pos.config has no picking_type_id set only the moves will be created
             if moves and not return_picking and not order_picking:
                 moves._action_assign()
-                moves.filtered(lambda m: m.state in ['confirmed', 'waiting'])._force_assign()
                 moves.filtered(lambda m: m.product_id.tracking == 'none')._action_done()
 
         return True
@@ -743,7 +757,6 @@ class PosOrder(models.Model):
         """Force picking in order to be set as done."""
         self.ensure_one()
         picking.action_assign()
-        picking.force_assign()
         wrong_lots = self.set_pack_operation_lot(picking)
         if not wrong_lots:
             picking.action_done()
@@ -802,7 +815,7 @@ class PosOrder(models.Model):
         """Create a new payment for the order"""
         args = {
             'amount': data['amount'],
-            'date': data.get('payment_date', fields.Date.today()),
+            'date': data.get('payment_date', fields.Date.context_today(self)),
             'name': self.name + ': ' + (data.get('payment_name', '') or ''),
             'partner_id': self.env["res.partner"]._find_accounting_partner(self.partner_id).id or False,
         }
@@ -983,7 +996,7 @@ class PosOrderLine(models.Model):
     def _onchange_qty(self):
         if self.product_id:
             if not self.order_id.pricelist_id:
-                raise UserError(_('You have to select a pricelist in the sale form !'))
+                raise UserError(_('You have to select a pricelist in the sale form.'))
             price = self.price_unit * (1 - (self.discount or 0.0) / 100.0)
             self.price_subtotal = self.price_subtotal_incl = price * self.qty
             if (self.product_id.taxes_id):
@@ -1056,7 +1069,8 @@ class ReportSaleDetails(models.AbstractModel):
         taxes = {}
         for order in orders:
             if user_currency != order.pricelist_id.currency_id:
-                total += order.pricelist_id.currency_id.compute(order.amount_total, user_currency)
+                total += order.pricelist_id.currency_id._convert(
+                    order.amount_total, user_currency, order.company_id, order.date_order or fields.Date.today())
             else:
                 total += order.amount_total
             currency = order.session_id.currency_id
@@ -1110,7 +1124,7 @@ class ReportSaleDetails(models.AbstractModel):
         }
 
     @api.multi
-    def get_report_values(self, docids, data=None):
+    def _get_report_values(self, docids, data=None):
         data = dict(data or {})
         configs = self.env['pos.config'].browse(data['config_ids'])
         data.update(self.get_sale_details(data['date_start'], data['date_stop'], configs))

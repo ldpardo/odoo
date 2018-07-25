@@ -15,7 +15,7 @@ var FormController = BasicController.extend({
         bounce_edit: '_onBounceEdit',
         button_clicked: '_onButtonClicked',
         do_action: '_onDoAction',
-        freeze_order: '_onFreezeOrder',
+        edited_list: '_onEditedList',
         open_one2many_record: '_onOpenOne2ManyRecord',
         open_record: '_onOpenRecord',
         toggle_column_order: '_onToggleColumnOrder',
@@ -50,8 +50,9 @@ var FormController = BasicController.extend({
     autofocus: function () {
         if (!this.disableAutofocus) {
             var isControlActivted = this.renderer.autofocus();
-            if (!isControlActivted) { 
-                // this can happen in read mode if there are no button with class oe_highlight
+            if (!isControlActivted) {
+                // this can happen in read mode if there are no buttons with
+                // btn-primary class
                 if (this.$buttons && this.mode === 'readonly') {
                     return this.$buttons.find('.o_form_button_edit').focus();
                 }
@@ -109,6 +110,7 @@ var FormController = BasicController.extend({
      * @todo convert to new style
      */
     on_attach_callback: function () {
+        this._super.apply(this, arguments);
         this.autofocus();
     },
     /**
@@ -231,6 +233,16 @@ var FormController = BasicController.extend({
             return changedFields;
         });
     },
+    /**
+     * Overrides to force the viewType to 'form', so that we ensure that the
+     * correct fields are reloaded (this is only useful for one2many form views).
+     *
+     * @override
+     */
+    update: function (params, options) {
+        params = _.extend({viewType: 'form'}, params);
+        return this._super(params, options);
+    },
 
     //--------------------------------------------------------------------------
     // Private
@@ -238,7 +250,7 @@ var FormController = BasicController.extend({
     /**
      * Assign on the buttons save and discard additionnal behavior to facilitate
      * the work of the users doing input only using the keyboard
-     * 
+     *
      * @param {jQueryElement} $saveCancelButtonContainer  The div containing the
      * save and cancel buttons
      * @private
@@ -256,9 +268,7 @@ var FormController = BasicController.extend({
                     self._discardChanges.apply(self);
                     break;
                 case $.ui.keyCode.TAB:
-                    if (!e.shiftKey && 
-                        (e.target.classList.contains("btn-primary") || 
-                         e.target.classList.contains("oe_highlight"))) {
+                    if (!e.shiftKey && e.target.classList.contains("btn-primary")) {
                         $saveCancelButtonContainer.tooltip('show');
                         e.preventDefault();
                     }
@@ -490,11 +500,11 @@ var FormController = BasicController.extend({
      */
     _onDoAction: function (event) {
         var self=this;
-        // A priori, different widgets could write on the "on_success" key. 
+        // A priori, different widgets could write on the "on_success" key.
         // Below we ensure that all the actions required by those widgets
         // are executed in a suitable order before every cycle of destruction.
         var callback = event.data.on_success || function () {};
-        event.data.on_success = function () { 
+        event.data.on_success = function () {
             callback();
             function isDialog (widget) {
                 return (widget instanceof Dialog);
@@ -529,15 +539,19 @@ var FormController = BasicController.extend({
      * in a x2many list view
      *
      * @private
-     * @param {OdooEvent} event
+     * @param {OdooEvent} ev
+     * @param {integer} ev.id of the list to freeze while editing a line
      */
-    _onFreezeOrder: function (event) {
-        event.stopPropagation();
-        this.model.freezeOrder(event.data.id);
+    _onEditedList: function (ev) {
+        ev.stopPropagation();
+        if (ev.data.id) {
+            this.model.save(ev.data.id, {savePoint: true});
+        }
+        this.model.freezeOrder(ev.data.id);
     },
     /**
      * Set the focus on the first primary button of the controller (likely Edit)
-     * 
+     *
      * @private
      * @param {OdooEvent} event
      */
@@ -549,7 +563,7 @@ var FormController = BasicController.extend({
     },
     /**
      * Reset the focus on the control that openned a Dialog after it was closed
-     * 
+     *
      * @private
      * @param {OdooEvent} event
      */
@@ -620,7 +634,11 @@ var FormController = BasicController.extend({
      */
     _onSave: function (ev) {
         ev.stopPropagation(); // Prevent x2m lines to be auto-saved
-        this.saveRecord();
+        var self = this;
+        this._disableButtons();
+        this.saveRecord().always(function () {
+            self._enableButtons();
+        });
     },
     /**
      * This method is called when someone tries to sort a column, most likely

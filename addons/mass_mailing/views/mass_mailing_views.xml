@@ -84,7 +84,7 @@
                                         </strong>
                                     </div>
                                     <span class="badge" title="Number of bounced email.">
-                                        <i class="fa fa-exclamation-triangle"/> <t t-esc="record.message_bounce.value" title=""/>
+                                        <i class="fa fa-exclamation-triangle" role="img" aria-label="Warning" title="Warning"/> <t t-esc="record.message_bounce.value" title=""/>
                                     </span>
                                 </div>
                                 <div class="o_kanban_record_body">
@@ -313,15 +313,15 @@
                                     </div>
                                     <div class="o_kanban_card_manage_pane">
                                         <div class="o_kanban_card_manage_section o_dropdown_kanban dropdown">
-                                            <a class="dropdown-toggle btn" data-toggle="dropdown" href="#" >
+                                            <a role="button" class="dropdown-toggle btn" data-toggle="dropdown" href="#" aria-label="Dropdown menu" title="Dropdown menu">
                                                 <span class="fa fa-ellipsis-v"/>
                                             </a>
                                             <ul class="dropdown-menu" role="menu">
                                                 <li t-if="widget.editable">
-                                                    <a type="edit">Edit</a>
+                                                    <a role="menuitem" type="edit">Edit</a>
                                                 </li>
                                                 <li t-if="widget.deletable">
-                                                    <a type="delete">Delete</a>
+                                                    <a role="menuitem" type="delete">Delete</a>
                                                 </li>
                                             </ul>
                                         </div>
@@ -331,7 +331,7 @@
                                     <a class="o_project_kanban_box" name="%(action_view_mass_mailing_contacts_from_list)d" type="action">
                                         <div>
                                             <span class="badge">
-                                                <i class="fa fa-user"/>
+                                                <i class="fa fa-user" role="img" aria-label="Contacts" title="Contacts"/>
                                                 <t t-esc="record.contact_nbr.value"/>
                                             </span>
                                         </div>
@@ -411,15 +411,16 @@
             <field name="arch" type="xml">
                 <form string="Mailing">
                     <header style="min-height:31px;">
-                        <button name="action_test_mailing" type="object" class="oe_highlight" string="Test Mailing"/>
-                        <button name="put_in_queue" type="object" attrs="{'invisible': ['|', ('state', 'in', ('in_queue', 'done'))]}" class="oe_highlight" string="Send to All"
+                        <button name="put_in_queue" type="object" attrs="{'invisible': [('state', 'in', ('in_queue', 'done'))]}" class="oe_highlight" string="Send Now"
                             confirm="This will send the email to all recipients. Do you still want to proceed ?"/>
-                        <button name="cancel_mass_mailing" type="object" attrs="{'invisible': [('state', '!=', 'in_queue')]}" class="oe_highlight" string="Cancel"/>
+                        <button name="action_schedule_date" type="object" attrs="{'invisible': [('state', 'in', ('in_queue', 'done'))]}" class="btn-default" string="Schedule"/>
+                        <button name="action_test_mailing" type="object" class="btn-default" string="Test"/>
+                        <button name="cancel_mass_mailing" type="object" attrs="{'invisible': [('state', '!=', 'in_queue')]}" class="btn-default" string="Cancel"/>
                         <button name="retry_failed_mail" type="object" attrs="{'invisible': ['|', ('state', '!=', 'done'), ('failed', '=', 0)]}" class="oe_highlight" string="Retry"/>
 
                         <field name="state" readonly="1" widget="statusbar"/>
                     </header>
-                    <div class="oe_form_box_info oe_text_center" attrs="{'invisible': [('scheduled', '=', 0)]}">
+                    <div class="oe_form_box_info bg-info oe_text_center" attrs="{'invisible': [('scheduled', '=', 0)]}">
                         <p>
                             <button class="btn-link"
                                     name="%(action_view_mail_mail_statistics_mailing_list)d"
@@ -432,7 +433,7 @@
                             </button>
                         </p>
                     </div>
-                    <div class="oe_form_box_info oe_text_center alert-info" attrs="{'invisible': ['|', ('state', '!=', 'done'), ('failed', '=', 0)]}">
+                    <div class="oe_form_box_info bg-info oe_text_center alert-info" attrs="{'invisible': ['|', ('state', '!=', 'done'), ('failed', '=', 0)]}" role="alert">
                         <p>
                             <button class="btn-link"
                                     name="%(action_view_mail_mail_statistics_mailing_list)d"
@@ -445,7 +446,7 @@
                             </button>
                         </p>
                     </div>
-                    <div class="oe_form_box_info oe_text_center" attrs="{'invisible': [('state', '!=', 'in_queue')]}">
+                    <div class="oe_form_box_info bg-info oe_text_center" attrs="{'invisible': [('state', '!=', 'in_queue')]}">
                         <p><strong>
                             This mailing is scheduled for
                             <field name="next_departure" class="oe_inline"/>.
@@ -532,7 +533,7 @@
                                             <field name="attachment_ids"  widget="many2many_binary" string="Attach a file" class="oe_inline"/>
                                         </div>
                                         <field name="mail_server_id" groups="base.group_no_one" options="{'no_create': True, 'no_open': True}"/>
-                                        <field name="schedule_date" />
+                                        <field name="schedule_date" groups='base.group_no_one'/>
                                         <field name="keep_archives" groups="base.group_no_one"/>
                                         <field name="create_date" readonly="1" attrs="{'invisible': [('create_date', '=', False)]}"/>
                                         <field name="sent_date" readonly="1" attrs="{'invisible': [('sent_date', '=', False)]}"/>
@@ -558,20 +559,20 @@
             <field name="arch" type="xml">
                 <kanban>
                     <field name='color'/>
-                    <field name='total'/>
+                    <field name='expected'/>
                     <field name='failed'/>
                     <field name='sent_date'/>
                     <templates>
                         <t t-name="kanban-box">
                             <div t-attf-class="oe_kanban_color_#{kanban_getcolor(record.color.raw_value)} oe_kanban_card oe_kanban_global_click oe_kanban_mass_mailing">
                                 <div class="o_dropdown_kanban dropdown">
-                                    <a class="dropdown-toggle btn" data-toggle="dropdown" href="#" >
+                                    <a role="button" class="dropdown-toggle btn" data-toggle="dropdown" href="#" aria-label="Dropdown menu" title="Dropdown menu">
                                         <span class="fa fa-ellipsis-v"/>
                                     </a>
-                                    <ul class="dropdown-menu" role="menu" aria-labelledby="dLabel">
-                                        <li><ul class="oe_kanban_colorpicker" data-field="color"/></li>
+                                    <ul class="dropdown-menu" role="menu">
+                                        <li role="menuitem" aria-haspopup="true"><ul role="menu" class="oe_kanban_colorpicker" data-field="color"/></li>
                                         <t t-if="widget.deletable">
-                                            <li><a type="delete">Delete</a></li>
+                                            <li><a role="menuitem" type="delete">Delete</a></li>
                                         </t>
                                     </ul>
                                 </div>
@@ -617,7 +618,7 @@
                                                 </div>
                                             </div>
                                             <div class='o_kanban_primary_bottom'>
-                                                <field name="delivered" widget="progressbar" title="Delivered" options="{'current_value': 'delivered', 'max_value': 'total', 'editable': false}"/>
+                                                <field name="delivered" widget="progressbar" title="Delivered" options="{'current_value': 'delivered', 'max_value': 'expected', 'editable': false}"/>
                                             </div>
                                         </t>
                                     </div>
@@ -919,19 +920,19 @@
                             <div t-attf-class="oe_kanban_color_#{kanban_getcolor(record.color.raw_value)} oe_kanban_card oe_kanban_global_click oe_kanban_mass_mailing_campaign">
                                 <div class="o_dropdown_kanban dropdown">
 
-                                    <a class="dropdown-toggle btn" data-toggle="dropdown" href="#" >
+                                    <a role="button" class="dropdown-toggle btn" data-toggle="dropdown" href="#" aria-label="Dropdown menu" title="Dropdown menu">
                                         <span class="fa fa-ellipsis-v"/>
                                     </a>
-                                    <ul class="dropdown-menu" role="menu" aria-labelledby="dLabel">
+                                    <ul class="dropdown-menu" role="menu">
                                         <t t-if="widget.editable">
-                                            <li><a type="edit">Settings</a></li>
+                                            <li><a role="menuitem" type="edit">Settings</a></li>
                                         </t>
                                         <t t-if="widget.deletable">
-                                            <li><a type="delete">Delete</a></li>
+                                            <li><a role="menuitem" type="delete">Delete</a></li>
                                         </t>
-                                        <li class="divider"/>
-                                        <li class="dropdown-header">Colour</li>
-                                        <li><ul class="oe_kanban_colorpicker" data-field="color"/></li>
+                                        <li role="separator" class="divider"/>
+                                        <li role="separator" class="dropdown-header">Colour</li>
+                                        <li role="menuitem" aria-haspopup="true"><ul class="oe_kanban_colorpicker" role="menu" data-field="color"/></li>
                                     </ul>
                                 </div>
                                  <div class="oe_kanban_content">
@@ -957,7 +958,7 @@
                                             </div>
                                         </div>
                                         <div class="oe_kanban_bottom_right" style="height:90px">
-                                            <img t-att-src="kanban_image('res.users', 'image_small', record.user_id.raw_value)" t-att-title="record.user_id.value" width="30" height="30" class="oe_kanban_avatar"/>
+                                            <img t-att-src="kanban_image('res.users', 'image_small', record.user_id.raw_value)" t-att-title="record.user_id.value" t-att-alt="record.user_id.value" width="30" height="30" class="oe_kanban_avatar"/>
                                         </div>
                                     </div>
                                 </div>

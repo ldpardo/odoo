@@ -11,7 +11,7 @@ var config = require('web.config');
 var Context = require('web.Context');
 var core = require('web.core');
 var data = require('web.data'); // this will be removed at some point
-var pyeval = require('web.pyeval');
+var pyUtils = require('web.py_utils');
 var SearchView = require('web.SearchView');
 var view_registry = require('web.view_registry');
 
@@ -229,15 +229,7 @@ ActionManager.include({
                     // the action has been removed, so simply destroy the widget
                     widget.destroy();
                 } else {
-                    // AAB: change this logic to stop using the properties mixin
-                    widget.on("change:title", this, function () {
-                        if (!action.flags.headless) {
-                            var breadcrumbs = self._getBreadcrumbs();
-                            self.controlPanel.update({breadcrumbs: breadcrumbs}, {clear: false});
-                        }
-                    });
                     controller.widget = widget;
-
                     def.resolve(controller);
                 }
             }).fail(def.reject.bind(def));
@@ -530,7 +522,7 @@ ActionManager.include({
         var domains = searchData.domains;
         var groupbys = searchData.groupbys;
         var action_context = action.context || {};
-        var results = pyeval.eval_domains_and_contexts({
+        var results = pyUtils.eval_domains_and_contexts({
             domains: [action.domain || []].concat(domains || []),
             contexts: [action_context].concat(contexts || []),
             group_by_seq: groupbys || [],
@@ -623,7 +615,14 @@ ActionManager.include({
         };
 
         var controllerDef = action.controllers[viewType];
-        if (!controllerDef) {
+        if (!controllerDef || controllerDef.state() === 'rejected') {
+            // if the controllerDef is rejected, it probably means that the js
+            // code or the requests made to the server crashed.  In that case,
+            // if we reuse the same deferred, then the switch to the view is
+            // definitely blocked.  We want to use a new controller, even though
+            // it is very likely that it will recrash again.  At least, it will
+            // give more feedback to the user, and it could happen that one
+            // record crashes, but not another.
             controllerDef = newController();
         } else {
             controllerDef = controllerDef.then(function (controller) {
@@ -704,7 +703,7 @@ ActionManager.include({
         var actionData = ev.data.action_data;
         var env = ev.data.env;
         var context = new Context(env.context, actionData.context || {});
-        var recordID = env.currentID || null; // pyeval handles null value, not undefined
+        var recordID = env.currentID || null; // pyUtils handles null value, not undefined
         var def;
 
         // determine the action to execute according to the actionData
@@ -734,7 +733,7 @@ ActionManager.include({
             });
         } else if (actionData.type === 'action') {
             // execute a given action, so load it first
-            def = this._loadAction(actionData.name, _.extend(pyeval.eval('context', context), {
+            def = this._loadAction(actionData.name, _.extend(pyUtils.eval('context', context), {
                 active_model: env.model,
                 active_ids: env.resIDs,
                 active_id: recordID,
@@ -752,7 +751,7 @@ ActionManager.include({
             // code below handles the first case i.e 'effect' attribute on button.
             var effect = false;
             if (actionData.effect) {
-                effect = pyeval.py_eval(actionData.effect);
+                effect = pyUtils.py_eval(actionData.effect);
             }
 
             if (action && action.constructor === Object) {

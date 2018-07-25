@@ -11,7 +11,7 @@ class AccountAnalyticLine(models.Model):
     @api.model
     def default_get(self, field_list):
         result = super(AccountAnalyticLine, self).default_get(field_list)
-        if 'employee_id' in field_list and result.get('user_id'):
+        if not self.env.context.get('default_employee_id') and 'employee_id' in field_list and result.get('user_id'):
             result['employee_id'] = self.env['hr.employee'].search([('user_id', '=', result['user_id'])], limit=1).id
         return result
 
@@ -23,13 +23,19 @@ class AccountAnalyticLine(models.Model):
 
     @api.onchange('project_id')
     def onchange_project_id(self):
-        # reset task when changing project
-        self.task_id = False
         # force domain on task when project is set
         if self.project_id:
+            if self.project_id != self.task_id.project_id:
+                # reset task when changing project
+                self.task_id = False
             return {'domain': {
                 'task_id': [('project_id', '=', self.project_id.id)]
             }}
+
+    @api.onchange('task_id')
+    def _onchange_task_id(self):
+        if not self.project_id:
+            self.project_id = self.task_id.project_id
 
     @api.onchange('employee_id')
     def _onchange_employee_id(self):
@@ -42,6 +48,14 @@ class AccountAnalyticLine(models.Model):
 
     @api.model
     def create(self, values):
+        # compute employee only for timesheet lines, makes no sense for other lines
+        if not values.get('employee_id') and values.get('project_id'):
+            if values.get('user_id'):
+                ts_user_id = values['user_id']
+            else:
+                ts_user_id = self._default_user()
+            values['employee_id'] = self.env['hr.employee'].search([('user_id', '=', ts_user_id)], limit=1).id
+
         values = self._timesheet_preprocess(values)
         result = super(AccountAnalyticLine, self).create(values)
         if result.project_id:  # applied only for timesheet
@@ -65,19 +79,13 @@ class AccountAnalyticLine(models.Model):
         if vals.get('project_id') and not vals.get('account_id'):
             project = self.env['project.project'].browse(vals.get('project_id'))
             vals['account_id'] = project.analytic_account_id.id
+            vals['company_id'] = project.analytic_account_id.company_id.id
             if not project.analytic_account_id.active:
                 raise UserError(_('The project you are timesheeting on is not linked to a active analytic account. Please the project configuration.'))
         # employee implies user
         if vals.get('employee_id') and not vals.get('user_id'):
             employee = self.env['hr.employee'].browse(vals['employee_id'])
             vals['user_id'] = employee.user_id.id
-        # compute employee only for timesheet lines, makes no sense for other lines
-        if not vals.get('employee_id') and vals.get('project_id'):
-            if vals.get('user_id'):
-                ts_user_id = vals['user_id']
-            else:
-                ts_user_id = self._default_user()
-            vals['employee_id'] = self.env['hr.employee'].search([('user_id', '=', ts_user_id)], limit=1).id
         # force customer partner, from the task or the project
         if (vals.get('project_id') or vals.get('task_id')) and not vals.get('partner_id'):
             partner_id = False
@@ -114,7 +122,8 @@ class AccountAnalyticLine(models.Model):
             for timesheet in sudo_self:
                 cost = timesheet.employee_id.timesheet_cost or 0.0
                 amount = -timesheet.unit_amount * cost
-                amount_converted = timesheet.employee_id.currency_id.compute(amount, timesheet.account_id.currency_id)
+                amount_converted = timesheet.employee_id.currency_id._convert(
+                    amount, timesheet.account_id.currency_id, self.env.user.company_id, timesheet.date)
                 result[timesheet.id].update({
                     'amount': amount_converted,
                 })

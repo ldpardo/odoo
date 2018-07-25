@@ -340,8 +340,8 @@ var FieldMany2One = AbstractField.extend({
     _renderReadonly: function () {
         var value = _.escape((this.m2o_value || "").trim()).split("\n").join("<br/>");
         this.$el.html(value);
-        if (!this.nodeOptions.no_open) {
-            this.$el.attr('href', '#');
+        if (!this.nodeOptions.no_open && this.value) {
+            this.$el.attr('href', _.str.sprintf('#id=%s&model=%s', this.value.res_id, this.field.relation));
             this.$el.addClass('o_form_uri');
         }
     },
@@ -843,6 +843,22 @@ var FieldX2Many = AbstractField.extend({
         });
     },
     /**
+     * Computes the default renderer to use depending on the view type.
+     * We create this as a method so we can override it if we want to use
+     * another renderer instead (eg. section_and_note_one2many).
+     *
+     * @private
+     * @returns {Object} The renderer to use
+     */
+    _getRenderer: function () {
+        if (this.view.arch.tag === 'tree') {
+            return ListRenderer;
+        }
+        if (this.view.arch.tag === 'kanban') {
+            return KanbanRenderer;
+        }
+    },
+    /**
      * Instanciates or updates the adequate renderer.
      *
      * @override
@@ -861,19 +877,22 @@ var FieldX2Many = AbstractField.extend({
         }
         var arch = this.view.arch;
         var viewType;
+        var rendererParams = {
+            arch: arch,
+        };
+
         if (arch.tag === 'tree') {
             viewType = 'list';
             this.currentColInvisibleFields = this._evalColumnInvisibleFields();
-            this.renderer = new ListRenderer(this, this.value, {
-                arch: arch,
+            _.extend(rendererParams, {
                 editable: this.mode === 'edit' && arch.attrs.editable,
                 addCreateLine: !this.isReadonly && this.activeActions.create,
                 addTrashIcon: !this.isReadonly && this.activeActions.delete,
                 isMany2Many: this.isMany2Many,
-                viewType: viewType,
                 columnInvisibleFields: this.currentColInvisibleFields,
             });
         }
+
         if (arch.tag === 'kanban') {
             viewType = 'kanban';
             var record_options = {
@@ -881,12 +900,17 @@ var FieldX2Many = AbstractField.extend({
                 deletable: false,
                 read_only_mode: this.isReadonly,
             };
-            this.renderer = new KanbanRenderer(this, this.value, {
-                arch: arch,
+            _.extend(rendererParams, {
                 record_options: record_options,
-                viewType: viewType,
             });
         }
+
+        _.extend(rendererParams, {
+            viewType: viewType,
+        });
+        var Renderer = this._getRenderer();
+        this.renderer = new Renderer(this, this.value, rendererParams);
+
         this.$el.addClass('o_field_x2many o_field_x2many_' + viewType);
         return this.renderer ? this.renderer.appendTo(this.$el) : this._super();
     },
@@ -943,8 +967,10 @@ var FieldX2Many = AbstractField.extend({
      */
     _renderButtons: function () {
         if (!this.isReadonly && this.view.arch.tag === 'kanban') {
-            var options = { create_text: this.nodeOptions.create_text };
-            this.$buttons = $(qweb.render('KanbanView.buttons', options));
+            this.$buttons = $(qweb.render('KanbanView.buttons', {
+                btnClass: 'btn-default',
+                create_text: this.nodeOptions.create_text,
+            }));
             this.$buttons.on('click', 'button.o-kanban-button-new', this._onAddRecord.bind(this));
         }
     },
@@ -1059,7 +1085,7 @@ var FieldX2Many = AbstractField.extend({
      */
     _onEditLine: function (ev) {
         ev.stopPropagation();
-        this.trigger_up('freeze_order', {id: this.value.id});
+        this.trigger_up('edited_list', { id: this.value.id });
         var editedRecord = this.value.data[ev.data.index];
         this.renderer.setRowMode(editedRecord.id, 'edit')
             .done(ev.data.onSuccess);
@@ -1147,7 +1173,7 @@ var FieldX2Many = AbstractField.extend({
     _onResequence: function (event) {
         event.stopPropagation();
         var self = this;
-        this.trigger_up('freeze_order', {id: this.value.id});
+        this.trigger_up('edited_list', { id: this.value.id });
         var rowIDs = event.data.rowIDs.slice();
         var rowID = rowIDs.pop();
         var defs = _.map(rowIDs, function (rowID, index) {
@@ -1264,11 +1290,18 @@ var FieldOne2Many = FieldX2Many.extend({
     /**
      * @private
      * @param {Object} params
+     * @param {Object} [params.context] We allow additional context, this is
+     *   used for example to define default values when adding new lines to
+     *   a one2many with control/create tags.
      */
     _openFormDialog: function (params) {
+        var context = this.record.getContext(_.extend({},
+            this.recordParams,
+            { additionalContext: params.context }
+        ));
         this.trigger_up('open_one2many_record', _.extend(params, {
             domain: this.record.getDomain(this.recordParams),
-            context: this.record.getContext(this.recordParams),
+            context: context,
             field: this.field,
             fields_view: this.attrs.views && this.attrs.views.form,
             parentID: this.value.id,
@@ -1291,25 +1324,30 @@ var FieldOne2Many = FieldX2Many.extend({
      */
     _onAddRecord: function (ev) {
         var self = this;
+        var data = ev.data || {};
+
         // we don't want interference with the components upstream.
         ev.stopPropagation();
+
         if (this.editable) {
             if (!this.activeActions.create) {
-                if (ev.data.onFail) {
-                    ev.data.onFail();
+                if (data.onFail) {
+                    data.onFail();
                 }
             } else if (!this.creatingRecord) {
                 this.creatingRecord = true;
-                this.trigger_up('freeze_order', {id: this.value.id});
+                this.trigger_up('edited_list', { id: this.value.id });
                 this._setValue({
                     operation: 'CREATE',
                     position: this.editable,
+                    context: data.context,
                 }).always(function () {
                     self.creatingRecord = false;
                 });
             }
         } else {
             this._openFormDialog({
+                context: data.context,
                 on_saved: function (record) {
                     self._setValue({ operation: 'ADD', id: record.id });
                 },
@@ -1330,12 +1368,24 @@ var FieldOne2Many = FieldX2Many.extend({
         // we don't want interference with the components upstream.
         ev.stopPropagation();
 
+        var self = this;
         var id = ev.data.id;
-        // trigger an empty 'UPDATE' operation when the user clicks on 'Save' in
-        // the dialog, to notify the main record that a subrecord of this
-        // relational field has changed (those changes will be already stored on
-        // that subrecord, thanks to the 'Save').
-        var onSaved = this._setValue.bind(this, { operation: 'UPDATE', id: id }, {});
+        var onSaved = function (record) {
+            if (_.some(self.value.data, {id: record.id})) {
+                // the record already exists in the relation, so trigger an
+                // empty 'UPDATE' operation when the user clicks on 'Save' in
+                // the dialog, to notify the main record that a subrecord of
+                // this relational field has changed (those changes will be
+                // already stored on that subrecord, thanks to the 'Save').
+                self._setValue({ operation: 'UPDATE', id: record.id });
+            } else {
+                // the record isn't in the relation yet, so add it ; this can
+                // happen if the user clicks on 'Save & New' in the dialog (the
+                // opened record will be updated, and other records will be
+                // created)
+                self._setValue({ operation: 'ADD', id: record.id });
+            }
+        };
         this._openFormDialog({
             id: id,
             on_saved: onSaved,
@@ -1579,6 +1629,7 @@ var FieldMany2ManyBinaryMultiFiles = AbstractField.extend({
 
         this.$('form.o_form_binary_form').submit();
         this.$('.oe_fileupload').hide();
+        ev.target.value = "";
     },
     /**
      * @private
@@ -1853,7 +1904,7 @@ var FormFieldMany2ManyTags = FieldMany2ManyTags.extend({
         var $target = $(ev.currentTarget);
         var color = $target.data('color');
         var id = $target.data('id');
-        var tag = this.$("span.badge[data-id='" + id + "']");
+        var tag = this.$("button.badge[data-id='" + id + "']");
         var currentColor = tag.data('color');
         var changes = {};
 
@@ -2287,6 +2338,75 @@ var FieldRadio = FieldSelection.extend({
     },
 });
 
+
+var FieldSelectionBadge = FieldSelection.extend({
+    template: null,
+    className: 'o_field_selection_badge',
+    tagName: 'span',
+    specialData: "_fetchSpecialMany2ones",
+    events: _.extend({}, AbstractField.prototype.events, {
+        'click span.o_selection_badge': '_onBadgeClicked',
+    }),
+
+    //--------------------------------------------------------------------------
+    // Private
+    //--------------------------------------------------------------------------
+
+    /**
+     * @private
+     * @override
+     */
+    _renderEdit: function () {
+        this.currentValue = this.value;
+
+        if (this.field.type === 'many2one') {
+            this.currentValue = this.value && this.value.data.id;
+        }
+        this.$el.empty();
+        this.$el.html(qweb.render('FieldSelectionBadge', {'values': this.values, 'current_value': this.currentValue}));
+    },
+    /**
+     * Sets the possible field values. If the field is a many2one, those values
+     * may change during the life cycle of the widget if the domain change (an
+     * onchange may change the domain).
+     *
+     * @private
+     * @override
+     */
+    _setValues: function () {
+        // Note: We can make abstract widget for common code in radio and selection badge
+        if (this.field.type === 'selection') {
+            this.values = this.field.selection || [];
+        } else if (this.field.type === 'many2one') {
+            this.values = _.map(this.record.specialData[this.name], function (val) {
+                return [val.id, val.display_name];
+            });
+        }
+    },
+
+    //--------------------------------------------------------------------------
+    // Handlers
+    //--------------------------------------------------------------------------
+
+    /**
+     * @private
+     * @param {MouseEvent} event
+     */
+    _onBadgeClicked: function (event) {
+        var index = $(event.target).data('index');
+        var value = this.values[index];
+        if (value[0] !== this.currentValue) {
+            if (this.field.type === 'many2one') {
+                this._setValue({id: value[0], display_name: value[1]});
+            } else {
+                this._setValue(value[0]);
+            }
+        } else {
+            this._setValue(false);
+        }
+    },
+});
+
 /**
  * The FieldReference is a combination of a select (for the model) and
  * a FieldMany2one for its value.
@@ -2316,6 +2436,21 @@ var FieldReference = FieldMany2One.extend({
      */
     start: function () {
         this.$('select').val(this.field.relation);
+        return this._super.apply(this, arguments);
+    },
+
+    //--------------------------------------------------------------------------
+    // Public
+    //--------------------------------------------------------------------------
+
+    /**
+     * @override
+     * @returns {jQuery}
+     */
+    getFocusableElement: function () {
+        if (this.mode === 'edit' && !this.field.relation) {
+            return this.$('select');
+        }
         return this._super.apply(this, arguments);
     },
 
@@ -2432,6 +2567,7 @@ return {
     KanbanFieldMany2ManyTags: KanbanFieldMany2ManyTags,
 
     FieldRadio: FieldRadio,
+    FieldSelectionBadge: FieldSelectionBadge,
     FieldSelection: FieldSelection,
     FieldStatus: FieldStatus,
 

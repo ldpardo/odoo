@@ -12,6 +12,7 @@ var session = require('web.session');
 var testUtils = require('web.test_utils');
 
 var createView = testUtils.createView;
+var createAsyncView = testUtils.createAsyncView;
 var DebouncedField = basicFields.DebouncedField;
 var _t = core._t;
 
@@ -1291,6 +1292,44 @@ QUnit.module('basic_fields', {
         list.destroy();
     });
 
+    QUnit.module('copy_clipboard', {
+        beforeEach: function () {
+            this.data = {
+                partner: {
+                    fields: {
+                        script_external: {string: "Script External", type: "text"},
+                        web_page: {string: "Web page link", type: "char"}
+                    },
+                    records: [{
+                        id: 1,
+                        script_external:'Random Text',
+                        web_page: 'web page links'
+                    },],
+                },
+            };
+        }
+    });
+
+    QUnit.test('im_livechat: Copy to clipboard button', function (assert) {
+        assert.expect(2);
+
+        var form = createView({
+            View: FormView,
+            model: 'partner',
+            data: this.data,
+            arch: '<form string="Partners">' +
+                    '<sheet>' +
+                            '<div>' +
+                                '<field name="script_external" widget="CopyClipboardText"/>' +
+                                '<field name="web_page" widget="CopyClipboardChar"/>' +
+                            '</div>' +
+                    '</sheet>' +
+                '</form>',
+        });
+        assert.strictEqual(form.$('.o_clipboard_button.o_btn_text_copy').length, 1,"Should have copy button on text type field");
+        assert.strictEqual(form.$('.o_clipboard_button.o_btn_char_copy').length, 1,"Should have copy button on char type field");
+        form.destroy();
+    });
 
     QUnit.module('FieldText');
 
@@ -1796,7 +1835,6 @@ QUnit.module('basic_fields', {
         assert.strictEqual(form.$('div[name="document"] > img').css('max-width'), "90px",
             "the image should correctly set its attributes");
         form.destroy();
-
     });
 
     QUnit.test('image fields in subviews are loaded correctly', function (assert) {
@@ -1843,12 +1881,40 @@ QUnit.module('basic_fields', {
 
         // Actual flow: click on an element of the m2m to get its form view
         form.$('tbody td:contains(gold)').click();
-        assert.strictEqual($('.modal-dialog').length, 1,
+        assert.strictEqual($('.modal').length, 1,
             'The modal should have opened');
         assert.verifySteps([
             "The view's image should have been fetched",
             "The dialog's image should have been fetched",
         ]);
+
+        form.destroy();
+    });
+
+    QUnit.test('image fields with required attribute', function (assert) {
+        assert.expect(2);
+
+        var form = createView({
+            View: FormView,
+            model: 'partner',
+            data: this.data,
+            arch: '<form string="Partners">' +
+                    '<field name="document" required="1" widget="image"/>' +
+                '</form>',
+            mockRPC: function (route, args) {
+                if (args.method === 'create') {
+                    throw new Error("Should not do a create RPC with unset required image field");
+                }
+                return this._super.apply(this, arguments);
+            },
+        });
+
+        form.$buttons.find('.o_form_button_save').click();
+
+        assert.ok(form.$('.o_form_view').hasClass('o_form_editable'),
+            "form view should still be editable");
+        assert.ok(form.$('.o_field_widget').hasClass('o_field_invalid'),
+            "image field should be displayed as invalid");
 
         form.destroy();
     });
@@ -1892,7 +1958,7 @@ QUnit.module('basic_fields', {
         assert.expect(4);
 
         var graph_key = JSON.parse(this.data.partner.records[0].graph_data)[0].key;
-        var kanban = createView({
+        createAsyncView({
             View: KanbanView,
             model: 'partner',
             data: this.data,
@@ -1905,42 +1971,41 @@ QUnit.module('basic_fields', {
                     '</t>' +
                 '</templates></kanban>',
             domain: [['id', 'in', [1, 2]]],
+        }).then(function (kanban) {
+            // nvd3 seems to do a setTimeout(0) each time the addGraph function is
+            // called, which is done twice in this case as there are 2 records.
+            // for that reason, we need to do two setTimeout(0) as well here to ensure
+            // that both graphs are rendered before starting to check if the rendering
+            // is correct.
+            concurrency.delay(0).then(function () {
+                return concurrency.delay(0);
+            }).then(function () {
+                assert.strictEqual(kanban.$('.o_kanban_record:first() .o_graph_barchart').length, 1,
+                    "graph of first record should be a barchart");
+                assert.strictEqual(kanban.$('.o_kanban_record:nth(1) .o_graph_linechart').length, 1,
+                    "graph of second record should be a linechart");
+
+                var evt = document.createEvent("MouseEvents"); //taken ref from https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/initMouseEvent
+                evt.initMouseEvent("mouseover", true, true, window, 0, 0, 0, 80, 20, false, false, false, false, 0, null);
+                $('.discreteBar')[0].dispatchEvent(evt);
+                var tooltip = $('.nvtooltip').find('table').find('.key')[0].innerText;
+                assert.equal(tooltip, graph_key, "graph tooltip should be generated ");
+                $('.nvtooltip').remove();
+
+                // force a re-rendering of the first record (to check if the
+                // previous rendered graph is correctly removed from the DOM)
+                var firstRecordState = kanban.model.get(kanban.handle).data[0];
+                return kanban.renderer.updateRecord(firstRecordState);
+            }).then(function () {
+                return concurrency.delay(0); // one graph is re-rendered
+            }).then(function () {
+                assert.strictEqual(kanban.$('.o_kanban_record:first() svg').length, 1,
+                    "there should be only one rendered graph by record");
+
+                kanban.destroy();
+                done();
+            });
         });
-
-        // nvd3 seems to do a setTimeout(0) each time the addGraph function is
-        // called, which is done twice in this case as there are 2 records.
-        // for that reason, we need to do two setTimeout(0) as well here to ensure
-        // that both graphs are rendered before starting to check if the rendering
-        // is correct.
-        concurrency.delay(0).then(function () {
-            return concurrency.delay(0);
-        }).then(function () {
-            assert.strictEqual(kanban.$('.o_kanban_record:first() .o_graph_barchart').length, 1,
-                "graph of first record should be a barchart");
-            assert.strictEqual(kanban.$('.o_kanban_record:nth(1) .o_graph_linechart').length, 1,
-                "graph of second record should be a linechart");
-
-            var evt = document.createEvent("MouseEvents"); //taken ref from https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/initMouseEvent
-            evt.initMouseEvent("mouseover", true, true, window, 0, 0, 0, 80, 20, false, false, false, false, 0, null);
-            $('.discreteBar')[0].dispatchEvent(evt);
-            var tooltip = $('.nvtooltip').find('table').find('.key')[0].innerText;
-            assert.equal(tooltip, graph_key, "graph tooltip should be generated ");
-            $('.nvtooltip').remove();
-
-            // force a re-rendering of the first record (to check if the
-            // previous rendered graph is correctly removed from the DOM)
-            var firstRecordState = kanban.model.get(kanban.handle).data[0];
-            return kanban.renderer.updateRecord(firstRecordState);
-        }).then(function () {
-            return concurrency.delay(0); // one graph is re-rendered
-        }).then(function () {
-            assert.strictEqual(kanban.$('.o_kanban_record:first() svg').length, 1,
-                "there should be only one rendered graph by record");
-
-            kanban.destroy();
-            done();
-        });
-
     });
 
     QUnit.test('graph dashboard widget does not need nv to be destroyed', function (assert) {
@@ -2362,6 +2427,38 @@ QUnit.module('basic_fields', {
         assert.strictEqual(form.$('.o_field_date').text(), newExpectedDateString,
             'the selected date should be displayed after saving');
 
+        form.destroy();
+    });
+
+    QUnit.test('datetime field in form view', function (assert) {
+        assert.expect(1);
+
+        this.data.partner.fields.datetime.default = "2017-08-02 12:00:05";
+        this.data.partner.fields.datetime.required = true;
+
+        var form = createView({
+            View: FormView,
+            model: 'partner',
+            data: this.data,
+            arch:'<form string="Partners"><field name="datetime"/></form>',
+            res_id: 1,
+            translateParameters: {  // Avoid issues due to localization formats
+                date_format: '%m/%d/%Y',
+                time_format: '%H:%M',
+            },
+        });
+        testUtils.patch(basicFields.FieldDate, {
+            _setValue: function () {
+                throw "The time format of the language must be taken into account."
+                return this._super.apply(this, arguments);
+            },
+        });
+        form.$buttons.find('.o_form_button_create').click();
+        var expectedDateString = "08/02/2017 12:00"; // 10:00:00 without timezone
+        assert.strictEqual(form.$('.o_field_date input').val(), expectedDateString,
+            'the datetime should be correctly displayed in readonly');
+
+        testUtils.unpatch(basicFields.FieldDate);
         form.destroy();
     });
 
@@ -3593,6 +3690,9 @@ QUnit.module('basic_fields', {
                     '</sheet>' +
                 '</form>',
             res_id: 1,
+            viewOptions: {
+                disable_autofocus: true,
+            },
         });
 
         assert.strictEqual(form.$('.o_field_widget.o_selection > a span.o_status.o_status_red').length, 1,
@@ -4275,9 +4375,9 @@ QUnit.module('basic_fields', {
 
     // TODO: This test would pass without any issue since all the classes and
     //       custom style attributes are correctly set on the widget in list
-    //       view, but since the less itself for this widget currently only
+    //       view, but since the scss itself for this widget currently only
     //       applies inside the form view, the widget is unusable. This test can
-    //       be uncommented when we refactor the less files so that this widget
+    //       be uncommented when we refactor the scss files so that this widget
     //       stylesheet applies in both form and list view.
     // QUnit.test('percentpie widget in editable list view', function(assert) {
     //     assert.expect(10);

@@ -24,7 +24,9 @@ class SaleOrder(models.Model):
         ('direct', 'Deliver each product when available'),
         ('one', 'Deliver all products at once')],
         string='Shipping Policy', required=True, readonly=True, default='direct',
-        states={'draft': [('readonly', False)], 'sent': [('readonly', False)]})
+        states={'draft': [('readonly', False)], 'sent': [('readonly', False)]}
+        ,help="If you deliver all products at once, the delivery order will be scheduled based on the greatest "
+        "product lead time. Otherwise, it will be based on the shortest.")
     warehouse_id = fields.Many2one(
         'stock.warehouse', string='Warehouse',
         required=True, readonly=True, states={'draft': [('readonly', False)], 'sent': [('readonly', False)]},
@@ -54,7 +56,7 @@ class SaleOrder(models.Model):
     def _action_confirm(self):
         super(SaleOrder, self)._action_confirm()
         for order in self:
-            order.order_line._action_launch_procurement_rule()
+            order.order_line._action_launch_stock_rule()
 
     @api.depends('picking_ids')
     def _compute_picking_ids(self):
@@ -142,7 +144,7 @@ class SaleOrderLine(models.Model):
     move_ids = fields.One2many('stock.move', 'sale_line_id', string='Stock Moves')
 
     @api.multi
-    @api.depends('product_id.type')
+    @api.depends('product_id')
     def _compute_qty_delivered_method(self):
         """ Stock module compute delivered qty for product [('type', 'in', ['consu', 'product'])]
             For SO line coming from expense, no picking should be generate: we don't manage stock for
@@ -170,12 +172,11 @@ class SaleOrderLine(models.Model):
                         qty -= move.product_uom._compute_quantity(move.product_uom_qty, line.product_uom)
                 line.qty_delivered = qty
 
-    @api.model
-    def create(self, values):
-        line = super(SaleOrderLine, self).create(values)
-        if line.state == 'sale':
-            line._action_launch_procurement_rule()
-        return line
+    @api.model_create_multi
+    def create(self, vals_list):
+        lines = super(SaleOrderLine, self).create(vals_list)
+        lines.filtered(lambda line: line.state == 'sale')._action_launch_stock_rule()
+        return lines
 
     @api.multi
     def write(self, values):
@@ -186,7 +187,7 @@ class SaleOrderLine(models.Model):
                 lambda r: r.state == 'sale' and not r.is_expense and float_compare(r.product_uom_qty, values['product_uom_qty'], precision_digits=precision) == -1)
         res = super(SaleOrderLine, self).write(values)
         if lines:
-            lines._action_launch_procurement_rule()
+            lines._action_launch_stock_rule()
         return res
 
     @api.depends('order_id.state')
@@ -273,7 +274,7 @@ class SaleOrderLine(models.Model):
 
     @api.multi
     def _prepare_procurement_values(self, group_id=False):
-        """ Prepare specific key for moves or other components that will be created from a procurement rule
+        """ Prepare specific key for moves or other components that will be created from a stock rule
         comming from a sale order line. This method could be override in order to add other custom key that could
         be used in move/po creation.
         """
@@ -293,10 +294,10 @@ class SaleOrderLine(models.Model):
         return values
 
     @api.multi
-    def _action_launch_procurement_rule(self):
+    def _action_launch_stock_rule(self):
         """
         Launch procurement group run method with required/custom fields genrated by a
-        sale order line. procurement group will launch '_run_move', '_run_buy' or '_run_manufacture'
+        sale order line. procurement group will launch '_run_pull', '_run_buy' or '_run_manufacture'
         depending on the sale order line product rule.
         """
         precision = self.env['decimal.precision'].precision_get('Product Unit of Measure')
@@ -388,7 +389,7 @@ class SaleOrderLine(models.Model):
 
         # Check Drop-Shipping
         if not is_available:
-            for pull_rule in product_routes.mapped('pull_ids'):
+            for pull_rule in product_routes.mapped('rule_ids'):
                 if pull_rule.picking_type_id.sudo().default_location_src_id.usage == 'supplier' and\
                         pull_rule.picking_type_id.sudo().default_location_dest_id.usage == 'customer':
                     is_available = True

@@ -54,7 +54,7 @@ class MrpBom(models.Model):
         'stock.picking.type', 'Operation Type', domain=[('code', '=', 'mrp_operation')],
         help=u"When a procurement has a ‘produce’ route with a operation type set, it will try to create "
              "a Manufacturing Order for that product using a BoM of the same operation type. That allows "
-             "to define procurement rules which trigger different manufacturing orders with different BoMs.")
+             "to define stock rules which trigger different manufacturing orders with different BoMs.")
     company_id = fields.Many2one(
         'res.company', 'Company',
         default=lambda self: self.env['res.company']._company_default_get('mrp.bom'),
@@ -80,6 +80,8 @@ class MrpBom(models.Model):
     def onchange_product_tmpl_id(self):
         if self.product_tmpl_id:
             self.product_uom_id = self.product_tmpl_id.uom_id.id
+            if self.product_id.product_tmpl_id != self.product_tmpl_id:
+                self.product_id = False
 
     @api.onchange('routing_id')
     def onchange_routing_id(self):
@@ -173,6 +175,13 @@ class MrpBom(models.Model):
 
         return boms_done, lines_done
 
+    @api.model
+    def get_import_templates(self):
+        return [{
+            'label': _('Import Template for Bills of Materials'),
+            'template': '/mrp/static/xls/mrp_bom.xls'
+        }]
+
 
 class MrpBomLine(models.Model):
     _name = 'mrp.bom.line'
@@ -265,11 +274,12 @@ class MrpBomLine(models.Model):
         if self.product_id:
             self.product_uom_id = self.product_id.uom_id.id
 
-    @api.model
-    def create(self, values):
-        if 'product_id' in values and 'product_uom_id' not in values:
-            values['product_uom_id'] = self.env['product.product'].browse(values['product_id']).uom_id.id
-        return super(MrpBomLine, self).create(values)
+    @api.model_create_multi
+    def create(self, vals_list):
+        for values in vals_list:
+            if 'product_id' in values and 'product_uom_id' not in values:
+                values['product_uom_id'] = self.env['product.product'].browse(values['product_id']).uom_id.id
+        return super(MrpBomLine, self).create(vals_list)
 
     def _skip_bom_line(self, product):
         """ Control if a BoM line should be produce, can be inherited for add

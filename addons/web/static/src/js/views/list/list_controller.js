@@ -10,7 +10,8 @@ odoo.define('web.ListController', function (require) {
 var core = require('web.core');
 var BasicController = require('web.BasicController');
 var DataExport = require('web.DataExport');
-var pyeval = require('web.pyeval');
+var Dialog = require('web.Dialog');
+var pyUtils = require('web.py_utils');
 var Sidebar = require('web.Sidebar');
 
 var _t = core._t;
@@ -66,7 +67,7 @@ var ListController = BasicController.extend({
         if (this.$('thead .o_list_record_selector input').prop('checked')) {
             var searchData = this.searchView.build_search_data();
             var userContext = this.getSession().user_context;
-            var results = pyeval.eval_domains_and_contexts({
+            var results = pyUtils.eval_domains_and_contexts({
                 domains: searchData.domains,
                 contexts: [userContext].concat(searchData.contexts),
                 group_by_seq: searchData.groupbys || []
@@ -136,6 +137,7 @@ var ListController = BasicController.extend({
      * @param {jQuery Node} $node
      */
     renderSidebar: function ($node) {
+        var self = this;
         if (this.hasSidebar) {
             var other = [{
                 label: _t("Export"),
@@ -144,7 +146,11 @@ var ListController = BasicController.extend({
             if (this.archiveEnabled) {
                 other.push({
                     label: _t("Archive"),
-                    callback: this._onToggleArchiveState.bind(this, true)
+                    callback: function () {
+                        Dialog.confirm(self, _t("Are you sure that you want to archive all the selected records?"), {
+                            confirm_callback: self._onToggleArchiveState.bind(self, true),
+                        });
+                    }
                 });
                 other.push({
                     label: _t("Unarchive"),
@@ -232,7 +238,7 @@ var ListController = BasicController.extend({
     },
     /**
      * Assign on the buttons create additionnal behavior to facilitate the work of the users doing input only using the keyboard
-     * 
+     *
      * @param {jQueryElement} $createButton  The create button itself
      */
     _assignCreateKeyboardBehavior: function($createButton) {
@@ -249,7 +255,7 @@ var ListController = BasicController.extend({
                     self.renderer.giveFocus();
                     break;
                 case $.ui.keyCode.TAB:
-                    if (!e.shiftKey && (e.target.classList.contains("btn-primary") || e.target.classList.contains("oe_highlight"))) {
+                    if (!e.shiftKey && e.target.classList.contains("btn-primary")) {
                         e.preventDefault();
                         $createButton.tooltip('show');
                     }
@@ -440,7 +446,10 @@ var ListController = BasicController.extend({
      */
     _onExportData: function () {
         var record = this.model.get(this.handle);
-        new DataExport(this, record).open();
+        var defaultExportFields = _.map(this.renderer.columns, function (field) {
+            return field.attrs.name;
+        });
+        new DataExport(this, record, defaultExportFields).open();
     },
     /**
      * Called when the renderer displays an editable row and the user tries to

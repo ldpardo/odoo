@@ -44,28 +44,6 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="col-md-6 col-xs-12 o_setting_box" id="repair">
-                                <div class="o_setting_left_pane">
-                                    <field name="module_repair"/>
-                                </div>
-                                <div class="o_setting_right_pane">
-                                    <label for="module_repair"/>
-                                    <div class="text-muted">
-                                        Repair products and invoice the repair orders
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-md-6 col-xs-12 o_setting_box" id="mrp_maintenance">
-                                <div class="o_setting_left_pane">
-                                    <field name="module_mrp_maintenance" widget="upgrade_boolean"/>
-                                </div>
-                                <div class="o_setting_right_pane">
-                                    <label for="module_mrp_maintenance"/>
-                                    <div class="text-muted">
-                                        Schedule the maintenance of your equipment
-                                    </div>
-                                </div>
-                            </div>
                         </div>
                         <h2>Products</h2>
                         <div class="row mt16 o_settings_container">
@@ -101,7 +79,7 @@
                                 </div>
                                 <div class="o_setting_right_pane">
                                     <label string="Security Lead Time" for="use_manufacturing_lead"/>
-                                    <span class="fa fa-lg fa-building-o" title="Values set here are company-specific." groups="base.group_multi_company"/>
+                                    <span class="fa fa-lg fa-building-o" title="Values set here are company-specific." role="img" aria-label="Values set here are company-specific." groups="base.group_multi_company"/>
                                     <div class="text-muted">
                                         Schedule manufacturing orders earlier to avoid delays
                                      </div>

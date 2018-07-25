@@ -9,7 +9,7 @@ class ReportBomStructure(models.AbstractModel):
     _name = 'report.mrp.report_bom_structure'
 
     @api.model
-    def get_report_values(self, docids, data=None):
+    def _get_report_values(self, docids, data=None):
         docs = []
         for bom_id in docids:
             bom = self.env['mrp.bom'].browse(bom_id)
@@ -120,9 +120,9 @@ class ReportBomStructure(models.AbstractModel):
             price = line.product_id.uom_id._compute_price(line.product_id.standard_price, line.product_uom_id) * line_quantity
             if line.child_bom_id:
                 factor = line.product_uom_id._compute_quantity(line_quantity, line.child_bom_id.product_uom_id) * line.child_bom_id.product_qty
-                total = self._get_price(line.child_bom_id, factor)
+                sub_total = self._get_price(line.child_bom_id, factor)
             else:
-                total = price
+                sub_total = price
             components.append({
                 'prod_id': line.product_id.id,
                 'prod_name': line.product_id.display_name,
@@ -132,11 +132,11 @@ class ReportBomStructure(models.AbstractModel):
                 'parent_id': bom.id,
                 'line_id': line.id,
                 'level': level or 0,
-                'total': total,
+                'total': sub_total,
                 'child_bom': line.child_bom_id.id,
                 'phantom_bom': line.child_bom_id and line.child_bom_id.type == 'phantom' or False,
             })
-            total += total
+            total += sub_total
         return components, total
 
     def _get_operation_line(self, routing, qty, level):
@@ -164,7 +164,7 @@ class ReportBomStructure(models.AbstractModel):
             if line.child_bom_id:
                 qty = line.product_uom_id._compute_quantity(line.product_qty * factor, line.child_bom_id.product_uom_id)
                 sub_price = self._get_price(line.child_bom_id, qty)
-                price += sub_price * qty
+                price += sub_price
             else:
                 prod_qty = line.product_qty * factor
                 price += (line.product_id.uom_id._compute_price(line.product_id.standard_price, line.product_uom_id) * prod_qty)

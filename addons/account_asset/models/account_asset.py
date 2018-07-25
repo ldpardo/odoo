@@ -128,7 +128,7 @@ class AccountAssetAsset(models.Model):
     def unlink(self):
         for asset in self:
             if asset.state in ['open', 'close']:
-                raise UserError(_('You cannot delete a document is in %s state.') % (asset.state,))
+                raise UserError(_('You cannot delete a document that is in %s state.') % (asset.state,))
             for depreciation_line in asset.depreciation_line_ids:
                 if depreciation_line.move_id:
                     raise UserError(_('You cannot delete a document that contains posted entries.'))
@@ -388,7 +388,7 @@ class AccountAssetAsset(models.Model):
     @api.constrains('prorata', 'method_time')
     def _check_prorata(self):
         if self.prorata and self.method_time != 'number':
-            raise ValidationError(_('Prorata temporis can be applied only for time method "number of depreciations".'))
+            raise ValidationError(_('Prorata temporis can be applied only for the "number of depreciations" time method.'))
 
     @api.onchange('category_id')
     def onchange_category_id(self):
@@ -438,7 +438,7 @@ class AccountAssetAsset(models.Model):
     @api.model
     def create(self, vals):
         asset = super(AccountAssetAsset, self.with_context(mail_create_nolog=True)).create(vals)
-        asset.compute_depreciation_board()
+        asset.sudo().compute_depreciation_board()
         return asset
 
     @api.multi
@@ -500,7 +500,7 @@ class AccountAssetDepreciationLine(models.Model):
         created_moves = self.env['account.move']
         for line in self:
             if line.move_id:
-                raise UserError(_('This depreciation is already linked to a journal entry! Please post or delete it.'))
+                raise UserError(_('This depreciation is already linked to a journal entry. Please post or delete it.'))
             move_vals = self._prepare_move(line)
             move = self.env['account.move'].create(move_vals)
             line.write({'move_id': move.id, 'move_check': True})
@@ -516,7 +516,8 @@ class AccountAssetDepreciationLine(models.Model):
         company_currency = line.asset_id.company_id.currency_id
         current_currency = line.asset_id.currency_id
         prec = company_currency.decimal_places
-        amount = current_currency.with_context(date=depreciation_date).compute(line.amount, company_currency)
+        amount = current_currency._convert(
+            line.amount, company_currency, line.asset_id.company_id, depreciation_date)
         asset_name = line.asset_id.name + ' (%s/%s)' % (line.sequence, len(line.asset_id.depreciation_line_ids))
         move_line_1 = {
             'name': asset_name,
@@ -554,7 +555,8 @@ class AccountAssetDepreciationLine(models.Model):
             # Sum amount of all depreciation lines
             company_currency = line.asset_id.company_id.currency_id
             current_currency = line.asset_id.currency_id
-            amount += current_currency.compute(line.amount, company_currency)
+            company = line.asset_id.company_id
+            amount += current_currency._convert(line.amount, company_currency, company, fields.Date.today())
 
         name = category_id.name + _(' (grouped)')
         move_line_1 = {

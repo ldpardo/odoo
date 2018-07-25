@@ -89,9 +89,10 @@ class Property(models.Model):
     def write(self, values):
         return super(Property, self).write(self._update_values(values))
 
-    @api.model
-    def create(self, values):
-        return super(Property, self).create(self._update_values(values))
+    @api.model_create_multi
+    def create(self, vals_list):
+        vals_list = [self._update_values(vals) for vals in vals_list]
+        return super(Property, self).create(vals_list)
 
     @api.multi
     def get_by_record(self):
@@ -189,7 +190,7 @@ class Property(models.Model):
         if not values:
             return
 
-        if not default_value:
+        if default_value is None:
             domain = self._get_domain(name, model)
             if domain is None:
                 raise Exception()
@@ -221,10 +222,11 @@ class Property(models.Model):
                 prop.write({'value': value})
 
         # create new properties for records that do not have one yet
+        vals_list = []
         for ref, id in refs.items():
             value = clean(values[id])
             if value != default_value:
-                self.create({
+                vals_list.append({
                     'fields_id': field_id,
                     'company_id': company_id,
                     'res_id': ref,
@@ -232,6 +234,7 @@ class Property(models.Model):
                     'value': value,
                     'type': self.env[model]._fields[name].type,
                 })
+        self.create(vals_list)
 
     @api.model
     def search_multi(self, name, model, operator, value):

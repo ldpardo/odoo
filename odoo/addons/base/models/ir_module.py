@@ -303,7 +303,7 @@ class Module(models.Model):
             return True
         for module in self:
             if module.state in ('installed', 'to upgrade', 'to remove', 'to install'):
-                raise UserError(_('You try to remove a module that is installed or will be installed'))
+                raise UserError(_('You are trying to remove a module that is installed or will be installed.'))
         self.clear_caches()
         return super(Module, self).unlink()
 
@@ -516,7 +516,7 @@ class Module(models.Model):
         _logger.info('getting next %s', Todos)
         active_todo = Todos.search([('state', '=', 'open')], limit=1)
         if active_todo:
-            _logger.info('next action is %s', active_todo)
+            _logger.info('next action is "%s"', active_todo.name)
             return active_todo.action_launch()
         return {
             'type': 'ir.actions.act_url',
@@ -668,7 +668,7 @@ class Module(models.Model):
         res = [0, 0]    # [update, add]
 
         default_version = modules.adapt_version('1.0')
-        known_mods = self.search([])
+        known_mods = self.with_context(lang=None).search([])
         known_mods_names = {mod.name: mod for mod in known_mods}
 
         # iterate through detected modules and update/create them in db

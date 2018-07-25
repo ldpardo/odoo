@@ -206,6 +206,13 @@ var InputField = DebouncedField.extend({
             this.isDirty = false;
         }
         if (this.isDirty || (event && event.target === this && event.data.changes[this.name] === this.value)) {
+            if (this.attrs.decorations) {
+                // if a field is modified, then it could have triggered an onchange
+                // which changed some of its decorations. Since we bypass the
+                // render function, we need to apply decorations here to make
+                // sure they are recomputed.
+                this._applyDecorations();
+            }
             return $.when();
         } else {
             return this._render();
@@ -319,7 +326,9 @@ var InputField = DebouncedField.extend({
                 || (ev.data.direction === "right" && (selecting || input.selectionStart !== input.value.length))) {
                 ev.stopPropagation();
             }
-            if (ev.data.direction ==='next' && this.attrs.modifiersValue.required) { 
+            if (ev.data.direction ==='next' &&
+                this.attrs.modifiersValue &&
+                this.attrs.modifiersValue.required) {
                 if (!this.$input.val()){
                     this.setInvalidClass();
                     ev.stopPropagation();
@@ -388,9 +397,10 @@ var LinkButton = AbstractField.extend({
         if (this.value) {
             var className = this.attrs.icon || 'fa-globe';
 
-            this.$el.html("<span />");
+            this.$el.html("<span role='img'/>");
             this.$el.addClass("fa "+ className);
             this.$el.attr('title', this.value);
+            this.$el.attr('aria-label', this.value);
         }
     },
 
@@ -489,7 +499,13 @@ var FieldDate = InputField.extend({
      * @private
      */
     _makeDatePicker: function () {
-        return new datepicker.DateWidget(this, {defaultDate: this.value});
+        return new datepicker.DateWidget(
+            this,
+            _.defaults(
+                this.nodeOptions.datepicker || {},
+                {defaultDate: this.value}
+            )
+        );
     },
 
     /**
@@ -620,7 +636,7 @@ var FieldMonetary = InputField.extend({
         this.$el.empty();
 
         // Prepare and add the input
-        this._prepareInput().appendTo(this.$el);
+        this._prepareInput(this.$input).appendTo(this.$el);
 
         if (this.currency) {
             // Prepare and add the currency symbol
@@ -867,6 +883,10 @@ var FieldFloatTime = FieldFloat.extend({
     formatType: 'float_time',
 });
 
+var FieldPercentage = FieldFloat.extend({
+    formatType:'percentage',
+});
+
 var FieldText = InputField.extend(TranslatableFieldMixin, {
     className: 'o_field_text',
     supportedFieldTypes: ['text'],
@@ -1044,6 +1064,77 @@ var UrlWidget = InputField.extend({
     }
 });
 
+var CopyClipboard = {
+
+    /**
+     * @override
+     */
+    destroy: function () {
+        this._super.apply(this, arguments);
+        this.clipboard.destroy();
+    },
+
+    //--------------------------------------------------------------------------
+    // Private
+    //--------------------------------------------------------------------------
+
+    /**
+     * Instatiates the Clipboad lib.
+     */
+    _initClipboard: function () {
+        var self = this;
+        var $clipboardBtn = this.$('.o_clipboard_button');
+        $clipboardBtn.tooltip({title: _t('Copied !'), trigger: 'manual', placement: 'right'});
+        this.clipboard = new Clipboard($clipboardBtn.get(0), {
+            text: function () {
+                return self.value.trim();
+            }
+        });
+        this.clipboard.on('success', function () {
+            _.defer(function () {
+                $clipboardBtn.tooltip('show');
+                _.delay(function () {
+                    $clipboardBtn.tooltip('hide');
+                }, 800);
+            });
+        });
+    },
+};
+
+var TextCopyClipboard = FieldText.extend(CopyClipboard, {
+
+    //--------------------------------------------------------------------------
+    // Private
+    //--------------------------------------------------------------------------
+
+    /**
+     * @override
+     */
+    _render: function() {
+        this._super.apply(this, arguments);
+        this.$el.addClass('o_field_copy');
+        this.$el.append($(qweb.render('CopyClipboardText')));
+        this._initClipboard();
+    }
+});
+
+var CharCopyClipboard = FieldChar.extend(CopyClipboard, {
+
+    //--------------------------------------------------------------------------
+    // Private
+    //--------------------------------------------------------------------------
+
+    /**
+     * @override
+     */
+    _render: function() {
+        this._super.apply(this, arguments);
+        this.$el.addClass('o_field_copy');
+        this.$el.append($(qweb.render('CopyClipboardChar')));
+        this._initClipboard();
+    }
+});
+
 var AbstractFieldBinary = AbstractField.extend({
     events: _.extend({}, AbstractField.prototype.events, {
         'change .o_input_file': 'on_file_change',
@@ -1195,9 +1286,6 @@ var FieldBinaryImage = AbstractFieldBinary.extend({
             self.do_warn(_t("Image"), _t("Could not display the selected image."));
         });
     },
-    isSet: function () {
-        return true;
-    },
 });
 
 var FieldBinaryFile = AbstractFieldBinary.extend({
@@ -1302,9 +1390,6 @@ var FieldPdfViewer = FieldBinaryFile.extend({
      * @param {DOMElement} iframe
      */
     _disableButtons: function (iframe) {
-        if (this.mode === 'readonly') {
-            $(iframe).contents().find('button#download').hide();
-        }
         $(iframe).contents().find('button#openFile').hide();
     },
     /**
@@ -1447,6 +1532,7 @@ var PriorityWidget = AbstractField.extend({
     _renderStar: function (tag, isFull, index, tip) {
         return $(tag)
             .attr('title', tip)
+            .attr('aria-label', tip)
             .attr('data-index', index)
             .addClass('o_priority_star fa')
             .toggleClass('fa-star', isFull)
@@ -1516,7 +1602,8 @@ var AttachmentImage = AbstractField.extend({
         if (this.value) {
             this.$el.empty().append($('<img>/', {
                 src: "/web/image/" + this.value.data.id + "?unique=1",
-                title: this.value.data.display_name
+                title: this.value.data.display_name,
+                alt: _t("Image")
             }));
         }
     }
@@ -1585,7 +1672,9 @@ var StateSelectionWidget = AbstractField.extend({
         this.$('.o_status')
             .removeClass('o_status_red o_status_green')
             .addClass(currentState.state_class)
-            .prop('special_click', true);
+            .prop('special_click', true)
+            .parent().attr('title', currentState.state_name)
+            .attr('aria-label', currentState.state_name);
 
         // Render "FormSelection.Items" and move it into "FormSelection"
         var $items = $(qweb.render('FormSelection.items', {
@@ -1649,8 +1738,9 @@ var FavoriteWidget = AbstractField.extend({
      * @private
      */
     _render: function () {
-        var template = this.attrs.nolabel ? '<a href="#"><i class="fa %s" title="%s"></i></a>' : '<a href="#"><i class="fa %s"></i> %s</a>';
-        this.$el.empty().append(_.str.sprintf(template, this.value ? 'fa-star' : 'fa-star-o', this.value ? _t('Remove from Favorites') : _t('Add to Favorites')));
+        var tip = this.value ? _t('Remove from Favorites') : _t('Add to Favorites');
+        var template = this.attrs.nolabel ? '<a href="#"><i class="fa %s" title="%s" aria-label="%s" role="img"></i></a>' : '<a href="#"><i class="fa %s" role="img" aria-label="%s"> %s</i></a>';
+        this.$el.empty().append(_.str.sprintf(template, this.value ? 'fa-star' : 'fa-star-o', tip, tip));
     },
 
     //--------------------------------------------------------------------------
@@ -2030,7 +2120,10 @@ var FieldProgressBar = AbstractField.extend({
             widthComplete = 100;
         }
 
-        this.$('.o_progress').toggleClass('o_progress_overflow', value > max_value);
+        this.$('.o_progress').toggleClass('o_progress_overflow', value > max_value)
+            .attr('aria-valuemin', '0')
+            .attr('aria-valuemax', max_value)
+            .attr('aria-valuenow', value);
         this.$('.o_progressbar_complete').css('width', widthComplete + '%');
 
         if (!this.write_mode) {
@@ -2087,6 +2180,7 @@ var FieldToggleBoolean = AbstractField.extend({
             .toggleClass('text-muted', !this.value);
         var title = this.value ? this.attrs.options.active : this.attrs.options.inactive;
         this.$el.attr('title', title);
+        this.$el.attr('aria-pressed', this.value);
     },
 
     //--------------------------------------------------------------------------
@@ -2503,6 +2597,21 @@ var AceEditor = DebouncedField.extend({
     //--------------------------------------------------------------------------
 
     /**
+     * Format value
+     *
+     * Note: We have to overwrite this method to always return a string.
+     * AceEditor works with string and not boolean value.
+     *
+     * @override
+     * @private
+     * @param {boolean|string} value
+     * @returns {string}
+     */
+    _formatValue: function (value) {
+        return this._super.apply(this, arguments) || '';
+    },
+
+    /**
      * @override
      * @private
      */
@@ -2524,6 +2633,7 @@ var AceEditor = DebouncedField.extend({
             this.aceSession.setValue(newValue);
         }
     },
+
     /**
      * Starts the ace library on the given DOM element. This initializes the
      * ace editor option according to the edit/readonly mode and binds ace
@@ -2632,6 +2742,7 @@ return {
     FieldDomain: FieldDomain,
     FieldFloat: FieldFloat,
     FieldFloatTime: FieldFloatTime,
+    FieldPercentage : FieldPercentage,
     FieldInteger: FieldInteger,
     FieldMonetary: FieldMonetary,
     FieldPercentPie: FieldPercentPie,
@@ -2649,6 +2760,8 @@ return {
     PriorityWidget: PriorityWidget,
     StatInfo: StatInfo,
     UrlWidget: UrlWidget,
+    TextCopyClipboard: TextCopyClipboard,
+    CharCopyClipboard: CharCopyClipboard,
     JournalDashboardGraph: JournalDashboardGraph,
     AceEditor: AceEditor,
 };

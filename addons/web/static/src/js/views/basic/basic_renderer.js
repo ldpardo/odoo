@@ -50,6 +50,7 @@ var BasicRenderer = AbstractRenderer.extend({
                 invalidFields.push(widget.name);
             }
             widget.$el.toggleClass('o_field_invalid', !canBeSaved);
+            widget.$el.attr('aria-invalid', !canBeSaved);
         });
         return invalidFields;
     },
@@ -135,13 +136,6 @@ var BasicRenderer = AbstractRenderer.extend({
             dom.setSelectionRange(field.getFocusableElement().get(0), {start: offset, end: offset});
         }
     },
-
-    /**
-     * Order to focus to be given to the content of the current view
-     */
-    giveFocus:function() {
-    },
-
     //--------------------------------------------------------------------------
     // Private
     //--------------------------------------------------------------------------
@@ -278,7 +272,7 @@ var BasicRenderer = AbstractRenderer.extend({
             element.$el.toggleClass("o_readonly_modifier", !!modifiers.readonly);
             element.$el.toggleClass("o_required_modifier", !!modifiers.required);
 
-            if (element.widget) {
+            if (element.widget && element.widget.updateModifiersValue) {
                 element.widget.updateModifiersValue(modifiers);
             }
 
@@ -356,6 +350,9 @@ var BasicRenderer = AbstractRenderer.extend({
      * @param {Object} node
      */
     _handleAttributes: function ($el, node) {
+        if ($el.is('button')) {
+            return;
+        }
         if (node.attrs.class) {
             $el.addClass(node.attrs.class);
         }
@@ -515,6 +512,35 @@ var BasicRenderer = AbstractRenderer.extend({
         });
     },
     /**
+     * Renders a button according to a given node element.
+     *
+     * @private
+     * @param {Object} node
+     * @param {Object} [options]
+     * @param {string} [options.extraClass]
+     * @param {boolean} [options.textAsTitle=false]
+     * @returns {jQuery}
+     */
+    _renderButtonFromNode: function (node, options) {
+        var btnOptions = {
+            attrs: _.omit(node.attrs, 'icon', 'string', 'type', 'attrs', 'modifiers', 'options'),
+            icon: node.attrs.icon,
+        };
+        if (options && options.extraClass) {
+            var classes = btnOptions.attrs.class ? btnOptions.attrs.class.split(' ') : [];
+            btnOptions.attrs.class = _.uniq(classes.concat(options.extraClass.split(' '))).join(' ');
+        }
+        var str = (node.attrs.string || '').replace(/_/g, '');
+        if (str) {
+            if (options && options.textAsTitle) {
+                btnOptions.attrs.title = str;
+            } else {
+                btnOptions.text = str;
+            }
+        }
+        return dom.renderButton(btnOptions);
+    },
+    /**
      * Instantiates the appropriate AbstractField specialization for the given
      * node and prepares its rendering and addition to the DOM. Indeed, the
      * rendering of the widget will be started and the associated deferred will
@@ -636,15 +662,23 @@ var BasicRenderer = AbstractRenderer.extend({
 
         // Prepare widget rendering and save the related deferred
         var def = widget._widgetRenderAndInsert(function () {});
-        if (def.state() === 'pending') {
+        var async = def.state() === 'pending';
+        if (async) {
             this.defs.push(def);
         }
+        var $el = async ? $('<div>') : widget.$el;
 
-        // handle other attributes/modifiers
-        this._handleAttributes(widget.$el, node);
-        this._registerModifiers(node, record, widget);
-        widget.$el.addClass('o_widget');
-        return widget.$el;
+        var self = this;
+        def.then(function () {
+            self._handleAttributes(widget.$el, node);
+            self._registerModifiers(node, record, widget);
+            widget.$el.addClass('o_widget');
+            if (async) {
+                $el.replaceWith(widget.$el);
+            }
+        });
+
+        return $el;
     },
 
     /**

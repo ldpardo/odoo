@@ -66,6 +66,8 @@ class Company(models.Model):
     _sql_constraints = [
         ('name_uniq', 'unique (name)', 'The company name must be unique !')
     ]
+    base_onboarding_company_done = fields.Boolean("Onboarding company step done",
+        compute="_compute_base_onboarding_company_done")
 
     @api.model_cr
     def init(self):
@@ -149,7 +151,7 @@ class Company(models.Model):
         return res
 
     @api.model
-    def name_search(self, name='', args=None, operator='ilike', limit=100):
+    def _name_search(self, name, args=None, operator='ilike', limit=100, name_get_uid=None):
         context = dict(self.env.context)
         newself = self
         if context.pop('user_preference', None):
@@ -160,7 +162,7 @@ class Company(models.Model):
             companies = self.env.user.company_id + self.env.user.company_ids
             args = (args or []) + [('id', 'in', companies.ids)]
             newself = newself.sudo()
-        return super(Company, newself.with_context(context)).name_search(name=name, args=args, operator=operator, limit=limit)
+        return super(Company, newself.with_context(context))._name_search(name=name, args=args, operator=operator, limit=limit, name_get_uid=name_get_uid)
 
     @api.model
     @api.returns('self', lambda value: value.id)
@@ -221,17 +223,28 @@ class Company(models.Model):
         # The write is made on the user to set it automatically in the multi company group.
         self.env.user.write({'company_ids': [(4, company.id)]})
         partner.write({'company_id': company.id})
+
+        # Make sure that the selected currency is enabled
+        if vals.get('currency_id'):
+            currency = self.env['res.currency'].browse(vals['currency_id'])
+            if not currency.active:
+                currency.write({'active': True})
         return company
 
     @api.multi
     def write(self, values):
         self.clear_caches()
+        # Make sure that the selected currency is enabled
+        if values.get('currency_id'):
+            currency = self.env['res.currency'].browse(values['currency_id'])
+            if not currency.active:
+                currency.write({'active': True})
         return super(Company, self).write(values)
 
     @api.constrains('parent_id')
     def _check_parent_id(self):
         if not self._check_recursion():
-            raise ValidationError(_('Error ! You cannot create recursive companies.'))
+            raise ValidationError(_('You cannot create recursive companies.'))
 
     @api.multi
     def open_company_edit_report(self):
@@ -252,3 +265,16 @@ class Company(models.Model):
                         .report_action(docids))
         else:
             return res
+
+    @api.depends('street')
+    def _compute_base_onboarding_company_done(self):
+        """ The company onboarding step is marked as done if street1 is filled. """
+        for record in self:
+            record.base_onboarding_company_done = bool(record.street)
+
+    @api.model
+    def action_open_base_onboarding_company(self):
+        """ Onboarding step for company basic information. """
+        action = self.env.ref('base.action_open_base_onboarding_company').read()[0]
+        action['res_id'] = self.env.user.company_id.id
+        return action

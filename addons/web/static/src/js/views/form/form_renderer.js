@@ -49,13 +49,13 @@ var FormRenderer = BasicRenderer.extend({
      * Focuses the field having attribute 'default_focus' set, if any, or the
      * first focusable field otherwise.
      * In read mode, delegate which button to give the focus to, to the form_renderer
-     * 
-     * @returns {int || undefined} the index of the widget activated else 
+     *
+     * @returns {int | undefined} the index of the widget activated else
      * undefined
      */
     autofocus: function () {
         if (this.mode === 'readonly') {
-            var firstPrimaryFormButton =  this.$el.find('button.oe_highlight:enabled:visible:first()');
+            var firstPrimaryFormButton =  this.$el.find('button.btn-primary:enabled:visible:first()');
             if (firstPrimaryFormButton.length > 0) {
                 return firstPrimaryFormButton.focus();
             } else {
@@ -335,7 +335,7 @@ var FormRenderer = BasicRenderer.extend({
         var visible_buttons = buttons_partition[1];
 
         // Get the unfolded buttons according to window size
-        var nb_buttons = [2, 2, 4, 6, 7][config.device.size_class];
+        var nb_buttons = [2, 2, 4, 6][config.device.size_class] || 7;
         var unfolded_buttons = visible_buttons.slice(0, nb_buttons).concat(invisible_buttons);
 
         // Get the folded buttons
@@ -345,7 +345,7 @@ var FormRenderer = BasicRenderer.extend({
             folded_buttons = [];
         }
 
-        // Toggle class to tell if the button box is full (LESS requirement)
+        // Toggle class to tell if the button box is full (CSS requirement)
         var full = (visible_buttons.length > nb_buttons);
         $result.toggleClass('o_full', full).toggleClass('o_not_full', !full);
 
@@ -356,10 +356,11 @@ var FormRenderer = BasicRenderer.extend({
 
         // Add the dropdown with folded buttons if any
         if (folded_buttons.length) {
-            $result.append($("<button>", {
-                type: 'button',
-                'class': "btn btn-sm oe_stat_button o_button_more dropdown-toggle",
-                'data-toggle': "dropdown",
+            $result.append(dom.renderButton({
+                attrs: {
+                    class: 'oe_stat_button o_button_more dropdown-toggle',
+                    'data-toggle': 'dropdown',
+                },
                 text: _t("More"),
             }));
 
@@ -392,9 +393,18 @@ var FormRenderer = BasicRenderer.extend({
      * @returns {jQueryElement}
      */
     _renderHeaderButton: function (node) {
-        var $button = $('<button>')
-                        .text(node.attrs.string)
-                        .addClass('btn btn-sm btn-default');
+        var $button = this._renderButtonFromNode(node);
+
+        // Current API of odoo for rendering buttons is "if classes are given
+        // use those on top of the 'btn' and 'btn-{size}' classes, otherwise act
+        // as if 'btn-default' class was given". The problem is that, for header
+        // buttons only, we allowed users to only indicate their custom classes
+        // without having to explicitely ask for the 'btn-default' class to be
+        // added. We force it so here when no bootstrap btn type class is found.
+        if ($button.not('.btn-primary, .btn-default, .btn-link, .btn-success, .btn-info, .btn-warning, .btn-danger').length) {
+            $button.addClass('btn-default');
+        }
+
         this._addOnClickAction($button, node);
         this._handleAttributes($button, node);
         this._registerModifiers(node, this.state, $button);
@@ -582,18 +592,9 @@ var FormRenderer = BasicRenderer.extend({
      * @returns {jQueryElement}
      */
     _renderStatButton: function (node) {
-        var $button = $('<button>').addClass('btn btn-sm oe_stat_button');
-        if (node.attrs.icon) {
-            $('<div>')
-                .addClass('fa fa-fw o_button_icon')
-                .addClass(node.attrs.icon)
-                .appendTo($button);
-        }
-        if (node.attrs.string) {
-            $('<span>')
-                .text(node.attrs.string)
-                .appendTo($button);
-        }
+        var $button = this._renderButtonFromNode(node, {
+            extraClass: 'oe_stat_button',
+        });
         $button.append(_.map(node.children, this._renderNode.bind(this)));
         this._addOnClickAction($button, node);
         this._handleAttributes($button, node);
@@ -633,11 +634,7 @@ var FormRenderer = BasicRenderer.extend({
      * @returns {jQueryElement}
      */
     _renderTagButton: function (node) {
-        var $button = dom.renderButton({
-            attrs: _.omit(node.attrs, 'icon', 'string'),
-            icon: node.attrs.icon,
-            text: (node.attrs.string || '').replace(/_/g, ''),
-        });
+        var $button = this._renderButtonFromNode(node);
         $button.append(_.map(node.children, this._renderNode.bind(this)));
         this._addOnClickAction($button, node);
         this._handleAttributes($button, node);

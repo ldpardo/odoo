@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+from collections import defaultdict
+
 from odoo.tests.common import TransactionCase, users, warmup
+from odoo.tools import pycompat
 
 
 class TestPerformance(TransactionCase):
@@ -59,7 +62,7 @@ class TestPerformance(TransactionCase):
     @warmup
     def test_create_base_with_lines(self):
         """ Create records with one2many lines. """
-        with self.assertQueryCount(admin=38, demo=38):
+        with self.assertQueryCount(admin=20, demo=20):
             self.env['test_performance.base'].create({
                 'name': 'X',
                 'line_ids': [(0, 0, {'value': val}) for val in range(10)],
@@ -74,3 +77,64 @@ class TestPerformance(TransactionCase):
                 'name': 'X',
                 'tag_ids': [(0, 0, {'name': val}) for val in range(10)],
             })
+
+    @users('admin', 'demo')
+    @warmup
+    def test_several_prefetch(self):
+        initial_records = self.env['test_performance.base'].search([])
+        self.assertEqual(len(initial_records), 5)
+        for _i in range(8):
+            self.env.cr.execute(
+                'insert into test_performance_base(value) select value from test_performance_base'
+            )
+        records = self.env['test_performance.base'].search([])
+        self.assertEqual(len(records), 1280)
+        # should only cause 2 queries thanks to prefetching
+        with self.assertQueryCount(admin=2, demo=2):
+            records.mapped('value')
+        records.invalidate_cache(['value'])
+
+        with self.assertQueryCount(admin=2, demo=2):
+            with self.env.do_in_onchange():
+                records.mapped('value')
+        self.env.cr.execute(
+            'delete from test_performance_base where id not in %s',
+            (tuple(initial_records.ids),)
+        )
+
+    def expected_read_group(self):
+        groups = defaultdict(list)
+        for record in self.env['test_performance.base'].search([]):
+            groups[record.partner_id.id].append(record.value)
+        partners = self.env['res.partner'].search([('id', 'in', list(groups))])
+        return [{
+            '__domain': [('partner_id', '=', partner.id)],
+            'partner_id': (partner.id, partner.display_name),
+            'partner_id_count': len(groups[partner.id]),
+            'value': sum(groups[partner.id]),
+        } for partner in partners]
+
+    @users('admin', 'demo')
+    def test_read_group_with_name_get(self):
+        model = self.env['test_performance.base']
+        expected = self.expected_read_group()
+        # use read_group and check the expected result
+        with self.assertQueryCount(admin=2, demo=2):
+            model.invalidate_cache()
+            result = model.read_group([], ['partner_id', 'value'], ['partner_id'])
+            self.assertEqual(result, expected)
+
+    @users('admin', 'demo')
+    def test_read_group_without_name_get(self):
+        model = self.env['test_performance.base']
+        expected = self.expected_read_group()
+        # use read_group and check the expected result
+        with self.assertQueryCount(admin=1, demo=1):
+            model.invalidate_cache()
+            result = model.read_group([], ['partner_id', 'value'], ['partner_id'])
+            self.assertEqual(len(result), len(expected))
+            for res, exp in pycompat.izip(result, expected):
+                self.assertEqual(res['__domain'], exp['__domain'])
+                self.assertEqual(res['partner_id'][0], exp['partner_id'][0])
+                self.assertEqual(res['partner_id_count'], exp['partner_id_count'])
+                self.assertEqual(res['value'], exp['value'])

@@ -8,6 +8,7 @@ var basicFields = require('web.basic_fields');
 var FormView = require('web.FormView');
 var ListView = require('web.ListView');
 var mixins = require('web.mixins');
+var NotificationService = require('web.NotificationService');
 var testUtils = require('web.test_utils');
 var widgetRegistry = require('web.widget_registry');
 var Widget = require('web.Widget');
@@ -396,6 +397,50 @@ QUnit.module('Views', {
         assert.ok($third_td.hasClass('o_readonly_modifier'),
             "int_field cell should be readonly in edit mode");
         list.destroy();
+    });
+
+    QUnit.test('editable list view: no active element', function (assert) {
+        assert.expect(3);
+        this.data.bar= {
+            fields: {
+                titi: {string: "Char", type: "char"},
+                grosminet: {string: "Bool", type: "boolean"},
+            },
+            records: [
+                {titi: 'cui', grosminet: true},
+                {titi: 'cuicui', grosminet: false},
+            ]
+        };
+        this.data.foo.records[0].o2m = [1, 2];
+        var form = createView({
+            View: FormView,
+            model: 'foo',
+            data: this.data,
+            res_id: 1,
+            viewOptions: { mode: 'edit' },
+            arch: '<form>'+
+                    '<field name="o2m">'+
+                        '<tree editable="top">'+
+                            '<field name="titi" readonly="1"/>'+
+                            '<field name="grosminet" widget="boolean_toggle"/>'+
+                        '</tree>'+
+                    '</field>'+
+                '</form>',
+        });
+        var $td = form.$('.o_data_cell').first();
+        var $td2 = form.$('.o_data_cell').eq(1);
+        assert.ok($td.hasClass("o_readonly_modifier"), "first field must be readonly");
+        assert.ok($td2.hasClass("o_boolean_toggle_cell"), "second field must be not activable but updatable on click (boolean toggle in this case)");
+        $td.click(); //select row first
+        var $slider = $td2.find('.slider').first();
+        try {
+            $slider.click(); //toggle boolean
+            assert.ok(true);
+        }
+        catch(e) {
+            assert.ok(false, "should not crash when clicking on the slider");
+        }
+        form.destroy();
     });
 
     QUnit.test('basic operations for editable list renderer', function (assert) {
@@ -835,14 +880,14 @@ QUnit.module('Views', {
         list.sidebar.$('a:contains(Delete)').click();
         assert.ok($('body').hasClass('modal-open'), 'body should have modal-open clsss');
 
-        $('body .modal-dialog button span:contains(Ok)').click();
+        $('body .modal button span:contains(Ok)').click();
 
         assert.strictEqual(list.$('tbody td.o_list_record_selector').length, 3, "should have 3 records");
         list.destroy();
     });
 
     QUnit.test('archiving one record', function (assert) {
-        assert.expect(9);
+        assert.expect(12);
 
         // add active field on foo model and make all records active
         this.data.foo.fields.active = {string: 'Active', type: 'boolean', default: true};
@@ -871,7 +916,13 @@ QUnit.module('Views', {
 
         assert.verifySteps(['/web/dataset/search_read']);
         list.sidebar.$('a:contains(Archive)').click();
+        assert.strictEqual($('.modal').length, 1, 'a confirm modal should be displayed');
+        $('.modal-footer .btn-default').click(); // Click on 'Cancel'
+        assert.strictEqual(list.$('tbody td.o_list_record_selector').length, 4, "still should have 4 records");
 
+        list.sidebar.$('a:contains(Archive)').click();
+        assert.strictEqual($('.modal').length, 1, 'a confirm modal should be displayed');
+        $('.modal-footer .btn-primary').click(); // Click on 'Ok'
         assert.strictEqual(list.$('tbody td.o_list_record_selector').length, 3, "should have 3 records");
         assert.verifySteps(['/web/dataset/search_read', '/web/dataset/call_kw/foo/write', '/web/dataset/search_read']);
         list.destroy();
@@ -2095,11 +2146,13 @@ QUnit.module('Views', {
                     '<field name="foo" required="1"/>' +
                     '<field name="bar"/>' +
                 '</tree>',
-            intercepts: {
-                warning: function () {
-                    warnings++;
-                },
-            },
+            services: [NotificationService.extend({
+                notify: function (params) {
+                    if (params.type === 'warning') {
+                        warnings++;
+                    }
+                }
+            })],
         });
 
         // Start first line edition
@@ -2405,7 +2458,7 @@ QUnit.module('Views', {
 
         // Press 'Tab' -> should go to next line
         // add a value in the cell because the Tab on an empty first cell would activate the next widget in the view
-        list.$('.o_selected_row input').val(11).trigger('input'); 
+        list.$('.o_selected_row input').val(11).trigger('input');
         list.$('.o_selected_row input').trigger({type: 'keydown', which: 9});
         assert.ok(list.$('.o_data_row:nth(3)').hasClass('o_selected_row'),
             "fourth row should be in edition");
@@ -3422,6 +3475,47 @@ QUnit.module('Views', {
         testUtils.unpatch(mixins.ParentedMixin);
     });
 
+    QUnit.test('concurrent reloads finishing in inverse order', function (assert) {
+        assert.expect(3);
+
+        var blockSearchRead = false;
+        var def = $.Deferred();
+        var list = createView({
+            View: ListView,
+            model: 'foo',
+            data: this.data,
+            arch: '<tree><field name="foo"/></tree>',
+            mockRPC: function (route) {
+                var result = this._super.apply(this, arguments);
+                if (route === '/web/dataset/search_read' && blockSearchRead) {
+                    return $.when(def).then(_.constant(result));
+                }
+                return result;
+            },
+        });
+
+        assert.strictEqual(list.$('.o_list_view .o_data_row').length, 4,
+            "list view should contain 4 records");
+
+        // reload with a domain (this request is blocked)
+        blockSearchRead = true;
+        list.reload({domain: [['foo', '=', 'yop']]});
+
+        assert.strictEqual(list.$('.o_list_view .o_data_row').length, 4,
+            "list view should still contain 4 records (search_read being blocked)");
+
+        // reload without the domain
+        blockSearchRead = false;
+        list.reload({domain: []});
+
+        // unblock the RPC
+        def.resolve();
+        assert.strictEqual(list.$('.o_list_view .o_data_row').length, 4,
+            "list view should still contain 4 records");
+
+        list.destroy();
+    });
+
     QUnit.test('list view on a "noCache" model', function (assert) {
         assert.expect(8);
 
@@ -3461,7 +3555,7 @@ QUnit.module('Views', {
         // delete a record
         list.$('.o_data_row:first .o_list_record_selector input').click();
         list.sidebar.$('a:contains(Delete)').click();
-        $('.modal .modal-footer .btn-primary').click(); // confirm
+        $('.modal-footer .btn-primary').click(); // confirm
 
         assert.verifySteps([
             'create',
@@ -3516,6 +3610,39 @@ QUnit.module('Views', {
 
         assert.verifySteps(['scroll', 'scroll', 'scroll'],
             "this is still working after a limit change");
+
+        list.destroy();
+    });
+
+    QUnit.test('list with handle field, override default_get, bottom when inline', function (assert) {
+        assert.expect(2);
+
+        this.data.foo.fields.int_field.default = 10;
+
+        var list = createView({
+            View: ListView,
+            model: 'foo',
+            data: this.data,
+            arch:
+                '<tree editable="bottom" default_order="int_field">'
+                    + '<field name="int_field" widget="handle"/>'
+                    + '<field name="foo"/>'
+                +'</tree>',
+        });
+
+        // starting condition
+        assert.strictEqual($('.o_data_cell').text(), "blipblipyopgnap");
+
+        // click add a new line
+        // save the record
+        // check line is at the correct place
+
+        var inputText = 'ninja';
+        $('.o_list_button_add').click();
+        list.$('.o_input[name="foo"]').val(inputText).trigger('input');
+        $('.o_list_button_add').click();
+
+        assert.strictEqual($('.o_data_cell').text(), "blipblipyopgnap" + inputText);
 
         list.destroy();
     });

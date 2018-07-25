@@ -33,6 +33,7 @@ var PivotView = AbstractView.extend({
      * @param {Object} params
      */
     init: function (viewInfo, params) {
+        var self = this;
         this._super.apply(this, arguments);
 
         var self = this;
@@ -71,8 +72,9 @@ var PivotView = AbstractView.extend({
             // the measure should be allowed.  However, be careful if you define
             // a measure in your pivot view: non stored functional fields will
             // probably not work (their aggregate will always be 0).
-            if (field.type === 'measure' && !(field.name in measures)) {
-                measures[field.name] = field;
+
+            if (field.attrs.type === 'measure' && !(field.attrs.name in measures)) {
+                measures[field.attrs.name] = self.fields[field.attrs.name];
             }
             if (field.attrs.type === 'measure' || 'operator' in field.attrs) {
                 activeMeasures.push(name);
@@ -93,6 +95,7 @@ var PivotView = AbstractView.extend({
         this.loadParams.colGroupBys = colGroupBys;
         this.loadParams.rowGroupBys = rowGroupBys;
         this.loadParams.fields = this.fields;
+        this.loadParams.default_order = params.default_order || this.arch.attrs.default_order;
 
         this.controllerParams.title = params.title || this.arch.attrs.string || _t("Untitled");
         this.controllerParams.enableLinking = !this.arch.attrs.disable_linking;
@@ -100,6 +103,7 @@ var PivotView = AbstractView.extend({
         this.controllerParams.groupableFields = groupableFields;
         // retrieve form and list view ids from the action to open those views
         // when a data cell of the pivot view is clicked
+
         this.controllerParams.views = [
             _findView(params.action && params.action.views, 'list'),
             _findView(params.action && params.action.views, 'form'),
@@ -116,5 +120,3 @@ var PivotView = AbstractView.extend({
 return PivotView;
 
 });
-
-

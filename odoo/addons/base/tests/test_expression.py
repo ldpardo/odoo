@@ -134,6 +134,15 @@ class TestExpression(TransactionCase):
         cats = Category.search([('id', 'child_of', categ_1.ids)])
         self.assertEqual(len(cats), 1)
 
+        # test hierarchical search in m2m with an empty list
+        cats = Category.search([('id', 'child_of', [])])
+        self.assertEqual(len(cats), 0)
+
+        # test hierarchical search in m2m with 'False' value
+        with self.assertLogs('odoo.osv.expression'):
+            cats = Category.search([('id', 'child_of', False)])
+        self.assertEqual(len(cats), 0)
+
         # test hierarchical search in m2m with parent id (list of ids)
         cats = Category.search([('id', 'parent_of', categ_1.ids)])
         self.assertEqual(len(cats), 3)
@@ -153,6 +162,15 @@ class TestExpression(TransactionCase):
         # test hierarchical search in m2m with parent ids
         cats = Category.search([('id', 'parent_of', categ_root.ids)])
         self.assertEqual(len(cats), 1)
+
+        # test hierarchical search in m2m with an empty list
+        cats = Category.search([('id', 'parent_of', [])])
+        self.assertEqual(len(cats), 0)
+
+        # test hierarchical search in m2m with 'False' value
+        with self.assertLogs('odoo.osv.expression'):
+            cats = Category.search([('id', 'parent_of', False)])
+        self.assertEqual(len(cats), 0)
 
     def test_10_equivalent_id(self):
         # equivalent queries
@@ -574,12 +592,12 @@ class TestExpression(TransactionCase):
             Country.search([('create_date', '=', "1970-01-01'); --")])
 
     def test_active(self):
-        # testing for many2many field with category vendor and active=False
+        # testing for many2many field with category office and active=False
         Partner = self.env['res.partner']
         vals = {
             'name': 'OpenERP Test',
             'active': False,
-            'category_id': [(6, 0, [self.ref("base.res_partner_category_1")])],
+            'category_id': [(6, 0, [self.ref("base.res_partner_category_0")])],
             'child_ids': [(0, 0, {'name': 'address of OpenERP Test', 'country_id': self.ref("base.be")})],
         }
         Partner.create(vals)

@@ -46,34 +46,34 @@
 
     <!-- Media Dialog (allows to choose an img/pictogram/video) -->
     <div t-name="web_editor.dialog.media">
-        <ul class="nav nav-tabs">
-            <li class="active"><a href="#editor-media-image" data-toggle="tab" t-att-class="widget.noImages ? 'hidden' : ''">Image</a></li>
-            <li><a href="#editor-media-document" data-toggle="tab" t-att-class="widget.noDocuments ? 'hidden' : ''">Document</a></li>
-            <li><a href="#editor-media-icon" data-toggle="tab" t-att-class="widget.noIcons ? 'hidden' : ''">Pictogram</a></li>
-            <li><a href="#editor-media-video" data-toggle="tab" t-att-class="widget.noVideos ? 'hidden' : ''">Video</a></li>
+        <ul class="nav nav-tabs" role="tablist">
+            <li class="active"><a role="tab" href="#editor-media-image" aria-controls="editor-media-image" data-toggle="tab" t-att-class="widget.noImages ? 'hidden' : ''">Image</a></li>
+            <li><a role="tab" href="#editor-media-document" aria-controls="editor-media-document" data-toggle="tab" t-att-class="widget.noDocuments ? 'hidden' : ''">Document</a></li>
+            <li><a role="tab" href="#editor-media-icon" aria-controls="editor-media-icon" data-toggle="tab" t-att-class="widget.noIcons ? 'hidden' : ''">Pictogram</a></li>
+            <li><a role="tab" href="#editor-media-video" aria-controls="editor-media-video" data-toggle="tab" t-att-class="widget.noVideos ? 'hidden' : ''">Video</a></li>
             <li class="search pull-right">
                 <ul class="pager mb0 mt0">
                     <li class="previous">
-                        <a class="btn btn-default disabled" href="#"><i class="fa fa-angle-left"/>&#32;Previous</a>
+                        <a role="button" class="btn btn-default disabled" href="#"><i class="fa fa-angle-left"/>&#32;Previous</a>
                     </li>
                     <li class="next">
-                        <a class="btn btn-default disabled" href="#">Next&#32;<i class="fa fa-angle-right"/></a>
+                        <a role="button" class="btn btn-default disabled" href="#">Next&#32;<i class="fa fa-angle-right"/></a>
                     </li>
                 </ul>
             </li>
             <li class="search pull-right">
                 <div class="form-group">
                     <input class="form-control" id="icon-search" type="search"/>
-                    <span class="fa fa-search"/>
+                    <span class="fa fa-search" title="Search" role="img" aria-label="Search"/>
                 </div>
             </li>
         </ul>
         <!-- Tab panes -->
         <div class="tab-content">
-            <div class="tab-pane fade in active" id="editor-media-image"/>
-            <div class="tab-pane fade" id="editor-media-document"/>
-            <div class="tab-pane fade" id="editor-media-icon"/>
-            <div class="tab-pane fade" id="editor-media-video"/>
+            <div role="tabpanel" class="tab-pane fade in active" id="editor-media-image"/>
+            <div role="tabpanel" class="tab-pane fade" id="editor-media-document"/>
+            <div role="tabpanel" class="tab-pane fade" id="editor-media-icon"/>
+            <div role="tabpanel" class="tab-pane fade" id="editor-media-video"/>
         </div>
     </div>
 
@@ -100,7 +100,7 @@
                         </button>
                         <ul class="dropdown-menu" role="menu">
                             <li>
-                                <a class="o_upload_image_button_no_optimization">Upload image without optimization</a>
+                                <a role="menuitem" class="o_upload_image_button_no_optimization">Upload image without optimization</a>
                             </li>
                         </ul>
                     </div>
@@ -109,7 +109,7 @@
                     <span class="text-muted">— or —</span>
                     <label for="imageurl">Add an image URL</label>
                     <div class="form-group btn-group">
-                        <input type="text" class="form-control url pull-left" id="imageurl" name="url" placeholder="https://www.odoo.com/logo.png" style="width: 320px;"/>
+                        <input type="text" class="form-control url pull-left" id="imageurl" name="url" placeholder="https://www.odoo.com/logo.png" style="width: 250px;"/>
                         <button type="button" class="btn btn-default o_upload_image_url_button" disabled="disabled">Add</button>
                     </div>
                 </div>
@@ -122,20 +122,20 @@
         </form>
     </t>
     <t t-name="web_editor.dialog.image.existing">
-        <div class="modal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div role="dialog" class="modal" tabindex="-1">
             <div class="modal-dialog select-image">
                 <div class="modal-content">
-                    <div class="modal-header">
-                        <button type="button" class="close" data-dismiss="modal" aria-hidden="true">×</button>
+                    <header class="modal-header">
+                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">×</button>
                         <h3 class="modal-title">Select a Picture</h3>
-                    </div>
-                    <div class="modal-body has-error">
+                    </header>
+                    <main class="modal-body has-error">
                         <div class="existing-attachments"/>
                         <div class="help-block"/>
-                    </div>
-                    <div class="modal-footer">
-                        <a data-dismiss="modal" href="#" aria-hidden="true">Discard</a>
-                    </div>
+                    </main>
+                    <footer class="modal-footer">
+                        <a data-dismiss="modal" href="#" aria-label="Discard">Discard</a>
+                    </footer>
                 </div>
             </div>
         </div>
@@ -144,9 +144,9 @@
         <div class="existing-attachments">
             <div class="row mt16" t-as="row" t-foreach="rows">
                 <div class="col-sm-2 o_existing_attachment_cell" t-as="attachment" t-foreach="row">
-                    <i t-if="attachment.res_model === 'ir.ui.view'" class="fa fa-times o_existing_attachment_remove" title="This file is a public view attachment" t-att-data-id="attachment.id"/>
-                    <i t-else="" class="fa fa-times o_existing_attachment_remove" title="This file is attached to the current record" t-att-data-id="attachment.id"/>
-                    <div class="o_attachment_border" t-att-style="attachment.res_model === 'ir.ui.view' ? null : 'border: 1px solid #5cb85c;'"><div t-att-data-src="attachment.src" t-att-data-url="attachment.url" t-att-alt="attachment.name" t-att-title="attachment.name" t-att-data-id="attachment.id" t-att-data-mimetype="attachment.mimetype" class="o_image o_image_loading"/></div>
+                    <i t-if="attachment.res_model === 'ir.ui.view'" class="fa fa-times o_existing_attachment_remove" title="This file is a public view attachment" role="img" aria-label="This file is a public view attachment" t-att-data-id="attachment.id"/>
+                    <i t-else="" class="fa fa-times o_existing_attachment_remove" title="This file is attached to the current record" role="img" aria-label="This file is attached to the current record" t-att-data-id="attachment.id"/>
+                    <div class="o_attachment_border" t-att-style="attachment.res_model === 'ir.ui.view' ? null : 'border: 1px solid #5cb85c;'"><div t-att-data-src="attachment.src" t-att-data-url="attachment.url" role="img" t-att-aria-label="attachment.name" t-att-title="attachment.name" t-att-data-id="attachment.id" t-att-data-mimetype="attachment.mimetype" class="o_image o_image_loading"/></div>
                 </div>
             </div>
         </div>
@@ -180,6 +180,7 @@
             <span t-foreach="data.cssData" t-as="cssData"
                 t-att-data-id="cssData.names[0]"
                 t-att-title="cssData.names[0]"
+                t-att-aria-label="cssData.names[0]" role="img"
                 t-attf-class="font-icons-icon #{data.base} #{cssData.names[0]}"
                 t-att-data-alias="cssData.names.join(',')"/>
         </t>
@@ -192,7 +193,7 @@
                 <div class="form-group" id="o_video_form_group">
                     <label class="mt8" for="o_video_text">Video code <small class="text-muted">(URL or Embed)</small></label>
                     <textarea class="form-control url" id="o_video_text" placeholder="Copy-paste your URL or embed code here"/>
-                    <label class="control-label o_validate_feedback" for="o_video_text"><i class="fa fa-check"/><i class="fa fa-exclamation-triangle"/></label>
+                    <label class="control-label o_validate_feedback" for="o_video_text"><i class="fa fa-check" role="img" aria-label="Checked" title="Checked"/><i class="fa fa-exclamation-triangle" role="img" aria-label="Attention" title="Attention"/></label>
                 </div>
                 <div class="text-right">
                     <small class="text-muted">Accepts <b><i>Youtube</i></b>, <b><i>Instagram</i></b>, <b><i>Vine.co</i></b>, <b><i>Vimeo</i></b>, <b><i>Dailymotion</i></b> and <b><i>Youku</i></b> videos</small>
@@ -265,13 +266,13 @@
                     <label class="control-label col-sm-3">Color</label>
                     <div class="col-sm-9">
                         <div class="o_link_dialog_color">
-                            <label t-attf-class="o_link_dialog_color_item o_btn_preview btn btn-link text-center" data-color="">
+                            <label role="button" t-attf-class="o_link_dialog_color_item o_btn_preview btn btn-link text-center" data-color="">
                                 <span>L</span>
                                 <input class="hidden link-style" name="link_style_color" type="radio" value=""/>
                                 <i class="fa"/>
                             </label>
                             <t t-foreach="['primary', 'default', 'success', 'info', 'warning', 'danger', 'alpha', 'beta', 'gamma', 'delta', 'epsilon']" t-as="color">
-                                <label t-attf-class="o_link_dialog_color_item o_btn_preview btn btn-#{color}">
+                                <label role="button" t-attf-class="o_link_dialog_color_item o_btn_preview btn btn-#{color}" t-attf-aria-label="Color for #{color}" t-attf-title="Color for #{color}">
                                     <input type="radio" name="link_style_color" class="hidden link-style" t-att-value="color"/>
                                     <i class="fa"/>
                                 </label>
@@ -293,11 +294,53 @@
                 <div class="form-group text-center">
                     <label>Preview</label>
                     <div style="overflow: auto; max-width: 100%; max-height: 200px;">
-                        <a href="#" id="link-preview"/>
+                        <a href="#" id="link-preview" aria-label="Preview" title="Preview"/>
                     </div>
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- Crop Image Dialog (allows to crop image on the page) -->
+    <div t-name="web_editor.dialog.crop_image" class="o_crop_image_dialog">
+        <div t-if="widget.imageData.isExternalImage" class="alert alert-warning text-center" role="alert">
+            <i class="fa fa-exclamation-triangle fa-2x"/>
+            <h4>This image is an external image</h4>
+            <p>
+                This type of image is not supported for cropping.<br/>
+                If you want to crop it, please first download it from the original source and upload it in Odoo.
+            </p>
+        </div>
+        <t t-else="">
+           <div class="o_crop_area">
+                <img class="img img-responsive o_cropper_image" t-att-src="widget.imageData.originalSrc"/>
+           </div>
+           <div class="o_crop_options text-center mt16">
+               <div class="btn-group" title="Aspect Ratio" data-toggle="buttons">
+                   <t t-foreach="widget.aspectRatioList" t-as="ratio">
+                       <t t-set="is_active" t-value="ratio[1] === widget.imageData.aspectRatio"/>
+                       <a href="#" t-attf-class="btn btn-default#{is_active and ' active' or ''}" data-event="ratio" t-att-data-label="ratio[1]" t-att-data-value="ratio[2]">
+                            <t t-esc="ratio[0]"/>
+                       </a>
+                   </t>
+               </div>
+               <div class="btn-group" role="group">
+                   <a href="#" class="btn btn-default" title="Zoom In" data-event="zoom" data-value="0.1"><i class="fa fa-search-plus"/></a>
+                   <a href="#" class="btn btn-default" title="Zoom Out" data-event="zoom" data-value="-0.1"><i class="fa fa-search-minus"/></a>
+               </div>
+               <div class="btn-group" role="group">
+                   <a href="#" class="btn btn-default" title="Rotate Left" data-event="rotate" data-value="-45"><i class="fa fa-rotate-left"/></a>
+                   <a href="#" class="btn btn-default" title="Rotate Right" data-event="rotate" data-value="45"><i class="fa fa-rotate-right"/></a>
+               </div>
+               <div class="btn-group" role="group">
+                   <a href="#" class="btn btn-default" title="Flip Horizontal" data-event="flip" data-value="horizontal" data-x="1"><i class="fa fa-arrows-h"/></a>
+                   <a href="#" class="btn btn-default" title="Flip Vertical" data-event="flip" data-value="vertical" data-y="1"><i class="fa fa-arrows-v"/></a>
+               </div>
+               <div class="btn-group" role="group">
+                   <a href="#" class="btn btn-default" title="Reset Image" data-event="reset"><i class="fa fa-refresh"/> Reset Image</a>
+               </div>
+           </div>
+       </t>
     </div>
 
     <!--=================-->

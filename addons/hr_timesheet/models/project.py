@@ -9,7 +9,7 @@ class Project(models.Model):
     _inherit = "project.project"
 
     allow_timesheets = fields.Boolean("Allow timesheets", default=True)
-    analytic_account_id = fields.Many2one('account.analytic.account', string="Analytic Account", ondelete='set null',
+    analytic_account_id = fields.Many2one('account.analytic.account', string="Analytic Account", copy=False, ondelete='set null',
         help="Link this project to an analytic account if you need financial management on projects. "
              "It enables you to connect projects with budgets, planning, cost and revenue analysis, timesheets on projects, etc.")
 
@@ -19,6 +19,11 @@ class Project(models.Model):
         if self.partner_id:
             domain = [('partner_id', '=', self.partner_id.id)]
         return {'domain': {'analytic_account_id': domain}}
+
+    @api.onchange('analytic_account_id')
+    def _onchange_analytic_account(self):
+        if not self.analytic_account_id:
+            self.allow_timesheets = False
 
     @api.constrains('allow_timesheets', 'analytic_account_id')
     def _check_allow_timesheet(self):
@@ -37,25 +42,27 @@ class Project(models.Model):
 
     @api.model
     def create(self, values):
-        """ Create an analytic account if project allow timesheet and don't provide one """
+        """ Create an analytic account if project allow timesheet and don't provide one
+            Note: create it before calling super() to avoid raising the ValidationError from _check_allow_timesheet
+        """
         allow_timesheets = values['allow_timesheets'] if 'allow_timesheets' in values else self.default_get(['allow_timesheets'])['allow_timesheets']
         if allow_timesheets and not values.get('analytic_account_id'):
-            analytic_account = self._create_analytic_account(values)
+            analytic_account = self.env['account.analytic.account'].create({
+                'name': values.get('name', _('Unkwon Analytic Account')),
+                'company_id': values.get('company_id', self.env.user.company_id.id),
+                'partner_id': values.get('partner_id'),
+                'active': True,
+            })
             values['analytic_account_id'] = analytic_account.id
         return super(Project, self).create(values)
 
     @api.multi
     def write(self, values):
         result = super(Project, self).write(values)
-        if values.get('allow_timesheets'):
-            for project in self:
-                if not project.analytic_account_id:
-                    analytic_account = project._create_analytic_account({
-                        'name': project.name,
-                        'company_id': project.company_id.id,
-                        'partner_id': project.partner_id.id,
-                    })
-                    project.write({'analytic_account_id': analytic_account.id})
+        # create the AA for project still allowing timesheet
+        for project in self:
+            if project.allow_timesheets and not project.analytic_account_id:
+                project._create_analytic_account()
         return result
 
     @api.multi
@@ -69,14 +76,19 @@ class Project(models.Model):
         analytic_accounts_to_delete.unlink()
         return result
 
-    def _create_analytic_account(self, values):
-        analytic_account = self.env['account.analytic.account'].create({
-            'name': values.get('name', _('Unkwon Analytic Account')),
-            'company_id': values.get('company_id', self.env.user.company_id.id),
-            'partner_id': values.get('partner_id'),
-            'active': True,
-        })
-        return analytic_account
+    @api.model
+    def _init_data_analytic_account(self):
+        self.search([('analytic_account_id', '=', False), ('allow_timesheets', '=', True)])._create_analytic_account()
+
+    def _create_analytic_account(self):
+        for project in self:
+            analytic_account = self.env['account.analytic.account'].create({
+                'name': project.name,
+                'company_id': project.company_id.id,
+                'partner_id': project.partner_id.id,
+                'active': True,
+            })
+            project.write({'analytic_account_id': analytic_account.id})
 
 
 class Task(models.Model):
@@ -99,7 +111,7 @@ class Task(models.Model):
     @api.depends('timesheet_ids.unit_amount')
     def _compute_effective_hours(self):
         for task in self:
-            task.effective_hours = sum(task.timesheet_ids.mapped('unit_amount'))
+            task.effective_hours = round(sum(task.timesheet_ids.mapped('unit_amount')), 2)
 
     @api.depends('effective_hours', 'subtask_effective_hours', 'planned_hours')
     def _compute_progress_hours(self):
@@ -141,9 +153,11 @@ class Task(models.Model):
             project_id = values.get('project_id')
             # a timesheet must have an analytic account (and a project)
             if self and not project_id:
-                raise UserError(_('This task must have a project since they are linked to timesheets.'))
+                raise UserError(_('This task must be part of a project because they some timesheets are linked to it.'))
+            account_id = self.env['project.project'].browse(project_id).sudo().analytic_account_id
             self.sudo().mapped('timesheet_ids').write({
                 'project_id': project_id,
-                'account_id': self.env['project.project'].browse(project_id).sudo().analytic_account_id.id
+                'account_id': account_id.id,
+                'company_id': account_id.company_id.id,
             })
         return result

@@ -68,9 +68,11 @@
                                     <group string="Position">
                                         <field name="department_id"/>
                                         <field name="job_id"/>
+                                        <field name="job_title"/>
                                         <field name="parent_id"/>
                                         <field name="coach_id"/>
                                         <field name="resource_calendar_id" required="1"/>
+                                        <field name="tz"/>
                                     </group>
                                 </group>
                                 <field name="notes" placeholder="Other Information ..." colspan="4"/>
@@ -85,7 +87,10 @@
                                     </group>
                                     <group string="Contact Information">
                                         <field name="address_home_id"
-                                            context="{'show_address': 1}"
+                                            context="{
+                                                'show_address': 1,
+                                                'default_type': 'private',
+                                                'form_view_ref': 'base.res_partner_view_form_private'}"
                                             options='{"always_reload": True, "highlight_first_line": True}'/>
                                         <field name="is_address_home_a_company" invisible="1"/>
                                         <div class="text-warning" groups="hr.group_hr_user"
@@ -94,19 +99,38 @@
                                             This private address is used in the expense report reimbursement document.
                                             It should be different from the work address.
                                         </div>
+                                        <field name="emergency_contact"/>
+                                        <field name="emergency_phone"/>
+                                        <field name="km_home_work" groups="hr.group_hr_user"/>
                                     </group>
                                     <group string="Status">
                                         <field name="gender"/>
                                         <field name="marital"/>
+                                        <field name="spouse_complete_name" attrs="{'invisible': [('marital', 'not in', ['married', 'cohabitant'])]}" groups="hr.group_hr_user"/>
+                                        <field name="spouse_birthdate" attrs="{'invisible': [('marital', 'not in', ['married', 'cohabitant'])]}" groups="hr.group_hr_user"/>
+                                        <field name="children"/>
                                     </group>
                                     <group string="Birth">
                                         <field name="birthday"/>
+                                        <field name="place_of_birth" groups="hr.group_hr_user"/>
+                                        <field name="country_of_birth" groups="hr.group_hr_user"/>
                                     </group>
                                     <group string="Work Permit" name="work_permit">
                                         <field name="visa_no"/>
                                         <field name="permit_no"/>
                                         <field name="visa_expire"/>
                                     </group>
+                                    <group string="Education">
+                                        <field name="certificate"/>
+                                        <field name="study_field"/>
+                                        <field name="study_school"/>
+                                    </group>
+                                </group>
+                                <group>
+                                    <field name="google_drive_link" widget="url"/>
+                                </group>
+                                <group>
+                                    <field name="additional_note"/>
                                 </group>
                             </page>
                             <page name="hr_settings" string="HR Settings" groups="hr.group_hr_user">
@@ -183,13 +207,13 @@
                     <t t-name="kanban-box">
                     <div class="oe_kanban_global_click">
                         <div class="o_kanban_image">
-                            <img t-att-src="kanban_image('hr.employee', 'image_medium', record.id.raw_value)"/>
+                            <img t-att-src="kanban_image('hr.employee', 'image_medium', record.id.raw_value)" alt="Employee"/>
                             <div class="o_employee_summary_icons">
                                 <t t-if="record.message_needaction_counter.raw_value">
-                                    <span class='oe_kanban_mail_new' title='Unread Messages'><i class='fa fa-comments'/><t t-raw="record.message_needaction_counter.raw_value"/></span>
+                                    <span role="alert" class='oe_kanban_mail_new' title='Unread Messages'><i class='fa fa-comments' role="img" aria-label="Unread Messages"/><t t-raw="record.message_needaction_counter.raw_value"/></span>
                                 </t>
-                                <span title='Messages'><i class='fa fa-comments'/><t t-esc="record.message_ids.raw_value.length"/></span>
-                                <span title='Followers'><i class='fa fa-users'/><t t-esc="record.message_follower_ids.raw_value.length"/></span>
+                                <span title='Messages'><i class='fa fa-comments' role="img" aria-label="Messages"/><t t-esc="record.message_ids.raw_value.length"/></span>
+                                <span title='Followers'><i class='fa fa-users' role="img" aria-label="Followers"/><t t-esc="record.message_follower_ids.raw_value.length"/></span>
                             </div>
                         </div>
                         <div class="oe_kanban_details">
@@ -205,9 +229,9 @@
                             <ul>
                                 <li id="last_login"/>
                                 <li t-if="record.work_location.raw_value"><field name="work_location"/></li>
-                                <li t-if="record.work_email.raw_value"><i class="fa fa-envelope"></i> <field name="work_email"/></li>
-                                <li t-if="record.work_phone.raw_value"><i class="fa fa-phone"></i> <field name="work_phone"/></li>
-                                <li t-if="record.mobile_phone.raw_value"><i class="fa fa-mobile"></i> <field name="mobile_phone"/></li>
+                                <li t-if="record.work_email.raw_value"><i class="fa fa-envelope" role="img" aria-label="Email" title="Email"></i> <field name="work_email"/></li>
+                                <li t-if="record.work_phone.raw_value"><i class="fa fa-phone" role="img" aria-label="Phone" title="Phone"></i> <field name="work_phone"/></li>
+                                <li t-if="record.mobile_phone.raw_value"><i class="fa fa-mobile" role="img" aria-label="Mobile" title="Mobile"></i> <field name="mobile_phone"/></li>
                             </ul>
                         </div>
                     </div>
@@ -543,7 +567,7 @@
                                         <div class="o_secondary"><field name="company_id" groups="base.group_multi_company"/></div>
                                     </div>
                                     <div class="o_kanban_manage_button_section">
-                                        <a class="o_kanban_manage_toggle_button" href="#"><i class="fa fa-ellipsis-v" /></a>
+                                        <a class="o_kanban_manage_toggle_button" href="#"><i class="fa fa-ellipsis-v" role="img" aria-label="Manage" title="Manage"/></a>
                                     </div>
                                 </div>
                                 <div class="container o_kanban_card_content">
@@ -554,19 +578,19 @@
                                         <div class="col-xs-6 o_kanban_primary_right">
                                         </div>
                                     </div>
-                                </div><div class="container o_kanban_card_manage_pane">
+                                </div><div class="container o_kanban_card_manage_pane dropdown-menu" role="menu">
                                     <div class="row">
-                                        <div class="col-xs-4 o_kanban_card_manage_section o_kanban_manage_to_do">
+                                        <div role="menuitem" class="col-xs-4 o_kanban_card_manage_section o_kanban_manage_to_do">
                                             <div class="o_kanban_card_manage_title">
                                                 <span>To Do</span>
                                             </div>
                                         </div>
-                                        <div class="col-xs-4 o_kanban_card_manage_section o_kanban_manage_to_approve">
+                                        <div role="menuitem" class="col-xs-4 o_kanban_card_manage_section o_kanban_manage_to_approve">
                                             <div class="o_kanban_card_manage_title">
                                                 <span>To Approve</span>
                                             </div>
                                         </div>
-                                        <div class="col-xs-4 o_kanban_card_manage_section o_kanban_manage_reports">
+                                        <div role="menuitem" class="col-xs-4 o_kanban_card_manage_section o_kanban_manage_reports">
                                             <div class="o_kanban_card_manage_title">
                                                 <span>Reporting</span>
                                             </div>
@@ -574,11 +598,11 @@
                                     </div>
 
                                     <div t-if="widget.editable" class="o_kanban_card_manage_settings row">
-                                        <div class="col-xs-8">
-                                            <ul class="oe_kanban_colorpicker" data-field="color"/>
+                                        <div role="menuitem" aria-haspopup="true" class="col-xs-8">
+                                            <ul class="oe_kanban_colorpicker" data-field="color" role="menu"/>
                                         </div>
                                         <div class="col-xs-4 text-right">
-                                            <a type="edit">Settings</a>
+                                            <a role="menuitem" type="edit">Settings</a>
                                         </div>
                                     </div>
                                 </div>

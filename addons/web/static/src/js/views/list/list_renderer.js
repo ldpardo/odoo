@@ -50,8 +50,9 @@ var ListRenderer = BasicRenderer.extend({
      */
     init: function (parent, state, params) {
         this._super.apply(this, arguments);
-        this.hasHandle = false;
-        this.handleField = 'sequence';
+        // This attribute lets us know if there is a handle widget on a field,
+        // and on which field it is set.
+        this.handleField = null;
         this._processColumns(params.columnInvisibleFields || {});
         this.rowDecorations = _.chain(this.arch.attrs)
             .pick(function (value, key) {
@@ -181,9 +182,11 @@ var ListRenderer = BasicRenderer.extend({
      */
     _processColumns: function (columnInvisibleFields) {
         var self = this;
-        self.hasHandle = false;
         self.handleField = null;
         this.columns = _.reject(this.arch.children, function (c) {
+            if (c.tag === 'control') {
+                return true;
+            }
             var reject = c.attrs.modifiers.column_invisible;
             // If there is an evaluated domain for the field we override the node
             // attribute to have the evaluated modifier value.
@@ -191,7 +194,6 @@ var ListRenderer = BasicRenderer.extend({
                 reject = columnInvisibleFields[c.attrs.name];
             }
             if (!reject && c.attrs.widget === 'handle') {
-                self.hasHandle = true;
                 self.handleField = c.attrs.name;
             }
             return reject;
@@ -312,16 +314,10 @@ var ListRenderer = BasicRenderer.extend({
      * @returns {jQuery} a <button> element
      */
     _renderButton: function (record, node) {
-        var $button = $('<button>', {
-            type: 'button',
-            title: node.attrs.string,
+        var $button = this._renderButtonFromNode(node, {
+            extraClass: node.attrs.icon ? 'o_icon_button' : undefined,
+            textAsTitle: !!node.attrs.icon,
         });
-        if (node.attrs.icon) {
-            $button.addClass('o_icon_button');
-            $button.append($('<i>', {class: 'fa ' + node.attrs.icon}));
-        } else {
-            $button.text(node.attrs.string);
-        }
         this._handleAttributes($button, node);
         this._registerModifiers(node, record, $button);
 
@@ -340,7 +336,7 @@ var ListRenderer = BasicRenderer.extend({
                 var self = this;
                 $button.on("click", function (e) {
                     e.stopPropagation();
-                    self.do_warn(_t("Warning"), _t('Please click on the "save" button first'));
+                    self.do_warn(_t("Warning"), _t('Please click on the "save" button first.'));
                 });
             } else {
                 $button.prop('disabled', true);
@@ -555,6 +551,10 @@ var ListRenderer = BasicRenderer.extend({
             .toggleClass('o-sort-up', isNodeSorted ? order[0].asc : false)
             .addClass(field.sortable && 'o_column_sortable');
 
+        if (isNodeSorted) {
+            $th.attr('aria-sort', order[0].asc ? 'ascending': 'descending');
+        }
+
         if (field.type === 'float' || field.type === 'integer' || field.type === 'monetary') {
             $th.css({textAlign: 'right'});
         }
@@ -742,9 +742,11 @@ var ListRenderer = BasicRenderer.extend({
             switch(e.which) {
                 case $.ui.keyCode.DOWN:
                     $(e.currentTarget).next().find('input').focus();
+                    e.preventDefault();
                     break;
                 case $.ui.keyCode.UP:
                     $(e.currentTarget).prev().find('input').focus();
+                    e.preventDefault();
                     break; 
                 case $.ui.keyCode.ENTER: 
                     e.preventDefault();

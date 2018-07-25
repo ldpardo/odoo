@@ -168,13 +168,6 @@
         <menuitem action="action_account_form" id="menu_action_account_form" parent="account_account_menu" groups="account.group_account_user" sequence="0"/>
 
         <act_window
-            id="account.action_all_partner_invoices"
-            name="All Invoices"
-            res_model="account.invoice"
-            domain="[('partner_id', 'child_of', active_id)]"
-            src_model="res.partner"/>
-
-        <act_window
             id="act_account_acount_move_line_open_unreconciled"
             name="Unreconciled Entries"
             res_model="account.move.line"
@@ -205,8 +198,7 @@
             id="action_move_line_select_by_partner"
             name="Journal Items"
             context="{'search_default_partner_id': [active_id]}"
-            res_model="account.move.line"
-            src_model="res.partner"/>
+            res_model="account.move.line"/>
 
         <!-- Account Journal -->
         <record id="view_account_journal_tree" model="ir.ui.view">
@@ -316,6 +308,18 @@
                                     </group>
                                 </group>
                             </page>
+                            <page name="bank_account" string="Bank Account" attrs="{'invisible': [('type', '!=', 'bank')]}">
+                                <group>
+                                    <group>
+                                        <field name="company_partner_id" invisible="1"/>
+                                        <field name="bank_account_id"/>
+                                        <field name="bank_id"/>
+                                    </group>
+                                    <group >
+                                        <field name="bank_statements_source" widget="radio" attrs="{'required': [('type', '=', 'bank')]}"  groups="account.group_account_user"/>
+                                    </group>
+                                </group>
+                            </page>
                             <page name="advanced_settings" string="Advanced Settings">
                                 <group>
                                     <group string="Control-Access" groups="base.group_no_one">
@@ -323,26 +327,26 @@
                                         <field name="type_control_ids" widget="many2many_tags"/>
                                         <field name="account_control_ids" widget="many2many_tags"/>
                                     </group>
-                                    <group string="Miscellaneous">
+                                    <group string="Payment Method Types">
                                         <field name="inbound_payment_method_ids" widget="many2many_checkboxes" attrs="{'invisible': [('type', 'not in', ['bank', 'cash'])]}"/>
                                         <field name="outbound_payment_method_ids" widget="many2many_checkboxes" attrs="{'invisible': [('type', 'not in', ['bank', 'cash'])]}"/>
                                         <field name="group_invoice_lines" attrs="{'invisible': [('type', 'not in', ['sale', 'purchase'])]}"/>
                                     </group>
-                                    <group string="Accounting App Options" groups="account.group_account_user">
-                                        <field name="profit_account_id" attrs="{'invisible': [('type', '!=', 'cash')]}"/>
-                                        <field name="loss_account_id" attrs="{'invisible': [('type', '!=', 'cash')]}"/>
-                                        <field name="show_on_dashboard" groups="base.group_no_one"/>
+                                    <group string="Accounting App Options" groups="account.group_account_user" attrs="{'invisible': [('type', '!=', 'cash')]}">
+                                        <field name="profit_account_id"/>
+                                        <field name="loss_account_id"/>
                                     </group>
-                                </group>
-                            </page>
-                            <page name="bank_account" string="Bank Account" attrs="{'invisible': [('type', '!=', 'bank')]}">
-                                <group>
-                                    <group>
-                                        <field name="bank_account_id"/>
-                                        <field name="bank_id"/>
-                                    </group>
-                                    <group >
-                                        <field name="bank_statements_source" widget="radio" attrs="{'required': [('type', '=', 'bank')]}"  groups="account.group_account_user"/>
+                                    <group name="group_alias" string="Email your Vendor Bills" attrs="{'invisible': [('type', '!=',  'purchase')]}">
+                                        <label string="Email Alias" attrs="{'invisible': [('alias_domain', '=', False)]}" for="alias_id"/>
+                                        <div name="alias_def" attrs="{'invisible': [('alias_domain', '=', False)]}">
+                                            <field name="alias_id" class="oe_read_only oe_inline"/>
+                                            <div class="oe_edit_only oe_inline" name="edit_alias" style="display: inline;" >
+                                                <field name="alias_name" class="oe_inline"/>@<field name="alias_domain" class="oe_inline" readonly="1"/>
+                                            </div>
+                                        </div>
+                                        <div class="content-group" attrs="{'invisible': [('alias_domain', '!=', False)]}">
+                                            <a type='action' name='%(action_open_settings)d' class="btn btn-sm btn-link" role="button"><i class="fa fa-fw o_button_icon fa-arrow-right"/> Configure Email Servers</a>
+                                    </div>
                                     </group>
                                 </group>
                             </page>
@@ -400,7 +404,7 @@
                         <group>
                             <group>
                                 <field name="bank_acc_number"/>
-                                <field name="bank_id"/>
+                                <field name="bank_id" readonly="1"/>
                             </group>
                             <group>
                                 <field name="company_id" options="{'no_create': True}" groups="base.group_multi_company"/>
@@ -409,10 +413,8 @@
                         </group>
                         <group>
                             <div name="advanced_info"> <!--The content of this div is hidden in the setup wizard inheriting this form view-->
-                                <group name="receivables" string="Receivables">
+                                <group string="Payment Method Types">
                                     <field name="inbound_payment_method_ids" widget="many2many_checkboxes"/>
-                                </group>
-                                <group name="payables" string="Payables">
                                     <field name="outbound_payment_method_ids" widget="many2many_checkboxes"/>
                                 </group>
                             </div>
@@ -644,6 +646,7 @@
                             <field name="cashbox_end_id" invisible="1"/>
                             <field name="journal_id" domain="[('type', '=', journal_type)]" attrs="{'readonly': [('move_line_count','!=', 0)]}" widget="selection"/>
                             <field name="date"/>
+                            <field name="accounting_date" groups="base.group_no_one"/>
                             <field name='company_id' options="{'no_create': True}" groups="base.group_multi_company" />
                             <field name="currency_id" invisible="1"/>
                         </group><group>
@@ -849,7 +852,7 @@
                                 <label for="amount"/>
                                 <div>
                                     <field name="amount" class="oe_inline"/>
-                                    <label string="%" class="oe_inline" attrs="{'invisible':[('amount_type','!=','percentage')]}" />
+                                    <span class="o_form_label oe_inline" attrs="{'invisible':[('amount_type','!=','percentage')]}">%</span>
                                 </div>
                                 <field name="journal_id" domain="[('company_id', '=', company_id)]" widget="selection"/>
                             </group>
@@ -871,7 +874,7 @@
                                 <label for="second_amount" string="Amount"/>
                                 <div>
                                     <field name="second_amount" class="oe_inline"/>
-                                    <label string="%" class="oe_inline" attrs="{'invisible':[('amount_type','!=','percentage')]}" />
+                                    <span class="o_form_label oe_inline" attrs="{'invisible':[('amount_type','!=','percentage')]}">%</span>
                                 </div>
                                 <field name="second_journal_id" string="Journal" domain="[('company_id', '=', company_id)]" widget="selection"/>
                             </group>
@@ -1094,7 +1097,7 @@
                                     <label for="amount" attrs="{'invisible':[('amount_type','not in', ('fixed', 'percent', 'division'))]}"/>
                                     <div attrs="{'invisible':[('amount_type','not in', ('fixed', 'percent', 'division'))]}">
                                         <field name="amount" class="oe_inline" />
-                                        <label string="%" class="oe_inline" attrs="{'invisible':[('amount_type','=','fixed')]}" />
+                                        <span class="o_form_label oe_inline" attrs="{'invisible':[('amount_type','=','fixed')]}">%</span>
                                     </div>
                                 </group>
                                 <group attrs="{'invisible':[('amount_type','=', 'group')]}" groups="account.group_account_user">
@@ -1159,14 +1162,15 @@
             <field name="model">account.move.line</field>
             <field eval="2" name="priority"/>
             <field name="arch" type="xml">
-                <form string="Journal Item">
+                <form string="Journal Item" create="false">
                     <sheet>
                         <field name="company_id" invisible="1"/>
                         <field name="parent_state" invisible="1"/>
                         <group>
                             <field name="name"/>
                             <field name="partner_id"
-                                domain="['|', ('parent_id', '=', False), ('is_company', '=', True)]"/>
+                                domain="['|', ('parent_id', '=', False), ('is_company', '=', True)]"
+                                attrs="{'readonly': [('parent_state', '=', 'posted')]}"/>
                         </group>
                         <notebook colspan="4">
                             <page string="Information">
@@ -1245,13 +1249,13 @@
                                         <span t-esc="record.move_id.value"/>
                                     </strong>
                                     <strong class="col-xs-6 text-right">
-                                        <i class="fa fa-clock-o"/><field name="date_maturity"/>
+                                        <i class="fa fa-clock-o" aria-label="Date" role="img" title="Date"/><field name="date_maturity"/>
                                     </strong>
                                     <div class="col-xs-10">
                                         <span t-esc="record.name.value"/>
                                     </div>
                                     <div class="col-xs-2 text-right">
-                                        <img t-att-src="kanban_image('res.partner', 'image_small', record.partner_id.raw_value)" t-att-title="record.partner_id.value" width="24" height="24" class="oe_kanban_avatar"/>
+                                        <img t-att-src="kanban_image('res.partner', 'image_small', record.partner_id.raw_value)" t-att-title="record.partner_id.value" t-att-alt="record.partner_id.value" width="24" height="24" class="oe_kanban_avatar"/>
                                     </div>
                                 </div>
                             </div>
@@ -1309,7 +1313,7 @@
             <field name="arch" type="xml">
                 <field name="full_reconcile_id" position="after">
                     <field name="tax_line_id"/>
-                    <field name="tax_base_amount"/>
+                    <field name="tax_base_amount" sum="Total Base Amount"/>
                 </field>
                 <field name="date_maturity" position="replace"/>
             </field>
@@ -1369,7 +1373,7 @@
                         <filter string="Partner" name="partner" domain="[]" context="{'group_by':'partner_id'}"/>
                         <filter string="Journal" name="journal" domain="[]" context="{'group_by':'journal_id'}"/>
                         <filter string="Account" name="account" context="{'group_by':'account_id'}"/>
-                        <filter string="Date" name="date_filter" domain="[]" context="{'group_by':'date'}"/>
+                        <filter string="Date" name="groupby_date" domain="[]" context="{'group_by':'date'}"/>
                     </group>
                 </search>
             </field>
@@ -1456,7 +1460,7 @@
                                         <strong><span><field name="journal_id"/></span></strong>
                                     </div>
                                     <div class="col-xs-6 text-right">
-                                        <strong><i class="fa fa-clock-o"/> <t t-esc="record.date.value"/></strong>
+                                        <strong><i class="fa fa-clock-o" aria-label="Date" role="img" title="Date"/> <t t-esc="record.date.value"/></strong>
                                     </div>
                                 </div>
                                 <div class="row">
@@ -1493,6 +1497,7 @@
                         <field name="state" widget="statusbar"/>
                     </header>
                     <sheet>
+                        <field name="tax_type_domain" invisible="1"/>
                         <field name="id" invisible="1"/>
                         <div class="oe_button_box">
                             <button name="action_view_reverse_entry"
@@ -1529,6 +1534,7 @@
                             <field name="line_ids" widget="one2many_list"
                               context="{'line_ids': line_ids, 'journal_id': journal_id }">
                                 <tree editable="bottom" string="Journal Items">
+                                    <field name="tax_line_id" invisible="1"/>
                                     <field name="account_id" domain="[('company_id', '=', parent.company_id), ('deprecated', '=', False)]"/>
                                     <field name="partner_id"
                                         domain="['|', ('parent_id', '=', False), ('is_company', '=', True)]"/>
@@ -1541,7 +1547,13 @@
                                     <field name="currency_id" options="{'no_create': True}" groups="base.group_multi_currency"/>
                                     <field name="debit" sum="Total Debit"/>
                                     <field name="credit" sum="Total Credit"/>
+                                    <field name="tax_ids" string="Taxes Applied" widget="many2many_tags"
+                                           domain="[('type_tax_use', '=?', parent.tax_type_domain)]"
+                                           context="{'append_type_to_tax_name': not parent.tax_type_domain}"
+                                           options="{'no_create': True}"/>
                                     <field name="date_maturity" required="0" invisible="context.get('view_no_maturity', False)"/>
+                                    <field name="recompute_tax_line" invisible="1" readonly="1"/>
+                                    <field name="tax_line_grouping_key" invisible="1" readonly="1"/>
                                 </tree>
                             </field>
                             <field name="narration" colspan="4" placeholder="Add an internal note..." nolabel="1" height="50"/>
@@ -1550,7 +1562,7 @@
                             <group>
                                 <field name="auto_reverse" attrs="{'readonly':[('reverse_entry_id', '!=', False)]}"/>
                                 <field name="reverse_date" attrs="{'invisible':[('auto_reverse', '=', False)], 'required':[('auto_reverse', '=', True)],'readonly':[('reverse_entry_id', '!=', False)]}"/>
-                                <field name="reverse_entry_id" attrs="{'invisible':True}"/>    
+                                <field name="reverse_entry_id" attrs="{'invisible':True}"/>
                             </group>
                         </page>
                     </notebook>
@@ -1581,7 +1593,7 @@
                         <filter string="Partner" name="partner" domain="[]" context="{'group_by':'partner_id'}"/>
                         <filter string="Journal" name="journal" domain="[]" context="{'group_by':'journal_id'}"/>
                         <filter string="Status" name="status" domain="[]" context="{'group_by':'state'}"/>
-                        <filter string="Date" name="date" domain="[]" context="{'group_by':'date'}" help="Journal Entries by Month"/>
+                        <filter string="Date" name="date" domain="[]" context="{'group_by':'date'}" help="Journal Entries by Date"/>
                     </group>
                 </search>
             </field>
@@ -1675,7 +1687,7 @@
                             <div attrs="{'invisible':[('value','=', 'balance')]}" class="o_row">
                                 <label for="value_amount" attrs="{'invisible':[('value','=', 'balance')]}"/>
                                 <field name="value_amount" class="oe_inline"/>
-                                <label string="%" class="oe_inline" attrs="{'invisible':[('value','!=','percent')]}"/>
+                                <span class="o_form_label oe_inline" attrs="{'invisible':[('value','!=','percent')]}">%</span>
                             </div>
                         </group>
                     </group>
@@ -1693,7 +1705,7 @@
                     <div colspan="2" attrs="{'invisible': [('option','!=', 'day_after_invoice_date')]}">
                         <label for="day_of_the_month" string="On the"/>
                         <field name="day_of_the_month" class="oe_inline"/>
-                        <label string="of the month"/>
+                        <span class="o_form_label">of the month</span>
                     </div>
                 </form>
             </field>
@@ -1840,14 +1852,13 @@
                 <form string="Chart of Accounts Template">
                     <group col="4">
                         <field name="name"/>
-                        <field name="company_id"/>
                         <field name="parent_id" />
                         <field name="bank_account_code_prefix"/>
                         <field name="cash_account_code_prefix"/>
+                        <field name="transfer_account_code_prefix"/>
                         <field name="code_digits" />
                         <field name="visible" />
                         <field name="complete_tax_set" />
-                        <field name="transfer_account_id"/>
                     </group>
                     <separator string="Default Taxes" colspan="4"/>
                     <field name="tax_template_ids" colspan="4"  nolabel="1"/>
@@ -1871,6 +1882,7 @@
                     <field name="name" string="Account Template"/>
                     <field name="bank_account_code_prefix"/>
                     <field name="cash_account_code_prefix"/>
+                    <field name="transfer_account_code_prefix"/>
                     <group expand="0" string="Group By">
                         <filter string="Receivable Account" name="receivalbeacc" domain="[]" context="{'group_by':'property_account_receivable_id'}"/>
                         <filter string="Payable Account" name="payableacc" domain="[]" context="{'group_by':'property_account_payable_id'}"/>
@@ -1886,7 +1898,6 @@
             <field name="arch" type="xml">
                 <tree string="Chart of Accounts Template">
                     <field name="name"/>
-                    <field name="company_id"/>
                     <field name="property_account_receivable_id" invisible="1"/>
                     <field name="property_account_payable_id" invisible="1"/>
                     <field name="property_account_expense_categ_id" invisible="1"/>
@@ -1923,7 +1934,7 @@
                                     <label for="amount" attrs="{'invisible':[('amount_type','=', 'group')]}"/>
                                     <div attrs="{'invisible':[('amount_type','=', 'group')]}">
                                         <field name="amount" class="oe_inline" />
-                                        <label string="%" class="oe_inline" attrs="{'invisible':[('amount_type','=','fixed')]}" />
+                                        <span class="o_form_label oe_inline" attrs="{'invisible':[('amount_type','=','fixed')]}">%</span>
                                     </div>
                                 </group>
                                 <group attrs="{'invisible':[('amount_type','=', 'group')]}">
@@ -1955,7 +1966,6 @@
                                 <group>
                                     <field name="tag_ids" domain="[('applicability', '!=', 'accounts')]" widget="many2many_tags" context="{'default_applicability': 'taxes'}"/>
                                     <field name="active" groups="base.group_no_one"/>
-                                    <field name="company_id" options="{'no_create': True}" groups="base.group_multi_company"/>
                                     <field name="tax_exigibility" widget="radio" attrs="{'invisible':[('amount_type','=', 'group')]}"/>
                                     <field name="cash_basis_account_id" attrs="{'invisible': [('tax_exigibility', '=', 'on_invoice')], 'required': [('tax_exigibility', '=', 'on_payment')]}"/>
                                 </group>
@@ -2025,12 +2035,12 @@
                             <div attrs="{'invisible': [('complete_tax_set', '=', True)]}">
                                 <field name="purchase_tax_rate" class="oe_inline"/> %%
                             </div>
-                            <field name="transfer_account_id"/>
                         </group>
                         <group groups="account.group_account_user" invisible="1">
                             <field name="code_digits"/>
                             <field name="bank_account_code_prefix"/>
                             <field name="cash_account_code_prefix"/>
+                            <field name="transfer_account_code_prefix"/>
                         </group>
                     </group>
                 </group>

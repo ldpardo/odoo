@@ -836,6 +836,16 @@ var ProductListWidget = PosBaseWidget.extend({
             options.click_product_action(product);
         };
 
+        this.keypress_product_handler = function(ev){
+            if (e.which != 13 && e.which != 32) {
+                // Key is not space or enter
+                return;
+            }
+            ev.preventDefault();
+            var product = self.pos.db.get_product_by_id(this.dataset.productId);
+            options.click_product_action(product);
+        };
+
         this.product_list = options.product_list || [];
         this.product_cache = new DomCache();
 
@@ -908,6 +918,7 @@ var ProductListWidget = PosBaseWidget.extend({
         for(var i = 0, len = this.product_list.length; i < len; i++){
             var product_node = this.render_product(this.product_list[i]);
             product_node.addEventListener('click',this.click_product_handler);
+            product_node.addEventListener('keypress',this.keypress_product_handler);
             list_container.appendChild(product_node);
         }
     },
@@ -1172,9 +1183,11 @@ var ClientListScreenWidget = ScreenWidget.extend({
         var order = this.pos.get_order();
         if( this.has_client_changed() ){
             var default_fiscal_position_id = _.findWhere(this.pos.fiscal_positions, {'id': this.pos.config.default_fiscal_position_id[0]});
-            if ( this.new_client && this.new_client.property_account_position_id ) {
-                var client_fiscal_position_id = _.findWhere(this.pos.fiscal_positions, {'id': this.new_client.property_account_position_id[0]});
-                order.fiscal_position = client_fiscal_position_id || default_fiscal_position_id;
+            if ( this.new_client ) {
+                if (this.new_client.property_account_position_id ){
+                  var client_fiscal_position_id = _.findWhere(this.pos.fiscal_positions, {'id': this.new_client.property_account_position_id[0]});
+                  order.fiscal_position = client_fiscal_position_id || default_fiscal_position_id;
+                }
                 order.set_pricelist(_.findWhere(this.pos.pricelists, {'id': this.new_client.property_product_pricelist[0]}) || this.pos.default_pricelist);
             } else {
                 order.fiscal_position = default_fiscal_position_id;
@@ -1279,7 +1292,8 @@ var ClientListScreenWidget = ScreenWidget.extend({
             })
             .then(function(partner_id){
                 self.saved_client_details(partner_id);
-            },function(type,err){
+            },function(err,ev){
+                ev.preventDefault();
                 var error_body = _t('Your Internet connection is probably down.');
                 if (err.data) {
                     var except = err.data;

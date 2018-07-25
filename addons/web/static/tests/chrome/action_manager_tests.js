@@ -2,17 +2,19 @@ odoo.define('web.action_manager_tests', function (require) {
 "use strict";
 
 var ReportClientAction = require('report.client_action');
-
+var NotificationService = require('web.NotificationService');
 var AbstractAction = require('web.AbstractAction');
 var AbstractStorageService = require('web.AbstractStorageService');
+var BasicFields = require('web.basic_fields');
 var ControlPanelMixin = require('web.ControlPanelMixin');
 var core = require('web.core');
 var ListController = require('web.ListController');
+var StandaloneFieldManagerMixin = require('web.StandaloneFieldManagerMixin');
 var RamStorage = require('web.RamStorage');
 var ReportService = require('web.ReportService');
+var SessionStorageService = require('web.SessionStorageService');
 var testUtils = require('web.test_utils');
 var Widget = require('web.Widget');
-
 var createActionManager = testUtils.createActionManager;
 
 QUnit.module('ActionManager', {
@@ -96,6 +98,9 @@ QUnit.module('ActionManager', {
             name: 'A Client Action',
             tag: 'ClientAction',
             type: 'ir.actions.client',
+        }, {
+            id: 10,
+            type: 'ir.actions.act_window_close',
         }];
 
         this.archs = {
@@ -1557,6 +1562,66 @@ QUnit.module('ActionManager', {
         actionManager.destroy();
     });
 
+    QUnit.test('open a record while reloading the list view', function (assert) {
+        assert.expect(12);
+
+        var def;
+        var actionManager = createActionManager({
+            actions: this.actions,
+            archs: this.archs,
+            data: this.data,
+            mockRPC: function (route) {
+                var result = this._super.apply(this, arguments);
+                if (route === '/web/dataset/search_read') {
+                    return $.when(def).then(_.constant(result));
+                }
+                return result;
+            },
+        });
+
+        actionManager.doAction(3);
+
+        assert.strictEqual(actionManager.$('.o_list_view').length, 1,
+            "should display the list view");
+        assert.strictEqual(actionManager.$('.o_list_view .o_data_row').length, 5,
+            "list view should contain 5 records");
+        assert.strictEqual($('.o_control_panel .o_list_buttons').length, 1,
+            "list view buttons should be displayed in control panel");
+
+        // reload (the search_read RPC will be blocked)
+        def = $.Deferred();
+        $('.o_control_panel .o_cp_switch_list').click(); // click on the switch button
+
+        assert.strictEqual(actionManager.$('.o_list_view .o_data_row').length, 5,
+            "list view should still contain 5 records");
+        assert.strictEqual($('.o_control_panel .o_list_buttons').length, 1,
+            "list view buttons should still be displayed in control panel");
+
+        // open a record in form view
+        actionManager.$('.o_list_view .o_data_row:first').click();
+
+        assert.strictEqual(actionManager.$('.o_form_view').length, 1,
+            "should display the form view");
+        assert.strictEqual($('.o_control_panel .o_list_buttons').length, 0,
+            "list view buttons should no longer be displayed in control panel");
+        assert.strictEqual($('.o_control_panel .o_form_buttons_view').length, 1,
+            "form view buttons should be displayed instead");
+
+        // unblock the search_read RPC
+        def.resolve();
+
+        assert.strictEqual(actionManager.$('.o_form_view').length, 1,
+            "should display the form view");
+        assert.strictEqual(actionManager.$('.o_list_view').length, 0,
+            "should not display the list view");
+        assert.strictEqual($('.o_control_panel .o_list_buttons').length, 0,
+            "list view buttons should still not be displayed in control panel");
+        assert.strictEqual($('.o_control_panel .o_form_buttons_view').length, 1,
+            "form view buttons should still be displayed instead");
+
+        actionManager.destroy();
+    });
+
     QUnit.module('Client Actions');
 
     QUnit.test('can execute client actions from tag name', function (assert) {
@@ -1637,6 +1702,36 @@ QUnit.module('ActionManager', {
         actionManager.doAction('HelloWorldTest');
 
         assert.verifySteps(['push state']);
+
+        actionManager.destroy();
+        delete core.action_registry.map.HelloWorldTest;
+    });
+
+    QUnit.test('breadcrumb is updated on title change', function (assert) {
+        assert.expect(2);
+
+        var ClientAction = Widget.extend(ControlPanelMixin, {
+            className: 'o_client_action_test',
+            events: {
+                click: function () {
+                    this.set("title", 'new title');
+                },
+            },
+            start: function () {
+                this.set("title", 'initial title');
+                this.$el.text('Hello World');
+            },
+        });
+        var actionManager = createActionManager();
+        core.action_registry.add('HelloWorldTest', ClientAction);
+        actionManager.doAction('HelloWorldTest');
+
+        assert.strictEqual($('ol.breadcrumb').text(), "initial title",
+            "should have initial title as breadcrumb content");
+
+        actionManager.$('.o_client_action_test').click();
+        assert.strictEqual($('ol.breadcrumb').text(), "new title",
+            "should have updated title as breadcrumb content");
 
         actionManager.destroy();
         delete core.action_registry.map.HelloWorldTest;
@@ -1739,6 +1834,7 @@ QUnit.module('ActionManager', {
                     assert.step(params.url);
                     params.success();
                     params.complete();
+                    return true;
                 },
             },
         });
@@ -1766,7 +1862,11 @@ QUnit.module('ActionManager', {
             actions: this.actions,
             archs: this.archs,
             data: this.data,
-            services: [ReportService],
+            services: [ReportService, NotificationService.extend({
+                notify: function (params) {
+                    assert.step(params.type || 'notification');
+                }
+            })],
             mockRPC: function (route, args) {
                 assert.step(args.method || route);
                 if (route === '/report/check_wkhtmltopdf') {
@@ -1779,11 +1879,7 @@ QUnit.module('ActionManager', {
                     assert.step(params.url);
                     params.success();
                     params.complete();
-                },
-            },
-            intercepts: {
-                notification: function () {
-                    assert.step('notification');
+                    return true;
                 },
             },
         });
@@ -1820,7 +1916,11 @@ QUnit.module('ActionManager', {
             actions: this.actions,
             archs: this.archs,
             data: this.data,
-            services: [ReportService],
+            services: [ReportService, NotificationService.extend({
+                notify: function (params) {
+                    assert.step(params.type || 'notification');
+                }
+            })],
             mockRPC: function (route, args) {
                 assert.step(args.method || route);
                 if (route === '/report/check_wkhtmltopdf') {
@@ -1834,11 +1934,7 @@ QUnit.module('ActionManager', {
             session: {
                 get_file: function (params) {
                     assert.step(params.url); // should not be called
-                },
-            },
-            intercepts: {
-                notification: function () {
-                    assert.step('notification');
+                    return true;
                 },
             },
         });
@@ -2323,6 +2419,51 @@ QUnit.module('ActionManager', {
         actionManager.destroy();
     });
 
+    QUnit.test('requests for execute_action of type object: disable buttons', function (assert) {
+        assert.expect(2);
+
+        var self = this;
+        var def;
+        var actionManager = createActionManager({
+            actions: this.actions,
+            archs: this.archs,
+            data: this.data,
+            mockRPC: function (route, args) {
+                if (route === '/web/dataset/call_button') {
+                    return $.when(false);
+                } else if (args.method === 'read') {
+                    // Block the 'read' call
+                    var result = this._super.apply(this, arguments);
+                    return $.when(def).then(_.constant(result));
+                }
+                return this._super.apply(this, arguments);
+            },
+        });
+        actionManager.doAction(3);
+
+        // open a record in form view
+        actionManager.$('.o_list_view .o_data_row:first').click();
+
+        // click on 'Call method' button (should call an Object method)
+        def = $.Deferred();
+        actionManager.$('.o_form_view button:contains(Call method)').click();
+
+        // Buttons should be disabled
+        assert.strictEqual(
+            actionManager.$('.o_form_view button:contains(Call method)').attr('disabled'),
+            'disabled', 'buttons should be disabled')
+
+        // Release the 'read' call
+        def.resolve();
+
+        // Buttons should be enabled after the reload
+        assert.strictEqual(
+            actionManager.$('.o_form_view button:contains(Call method)').attr('disabled'),
+            undefined, 'buttons should be disabled')
+
+        actionManager.destroy();
+    });
+
     QUnit.test('can open different records from a multi record view', function (assert) {
         assert.expect(11);
 
@@ -2736,7 +2877,7 @@ QUnit.module('ActionManager', {
             intercepts: {
                 create_filter: function (event) {
                     var filter = event.data.filter;
-                    assert.deepEqual(filter.domain, [['bar', '=', 1]],
+                    assert.deepEqual(filter.domain, "[('bar', '=', 1)]",
                         "should save the correct domain");
                     assert.deepEqual(filter.context, {shouldBeInFilterContext: true},
                         "should save the correct context");
@@ -2828,6 +2969,68 @@ QUnit.module('ActionManager', {
         actionManager.destroy();
     });
 
+    QUnit.test("current act_window action is stored in session_storage", function (assert) {
+        assert.expect(1);
+
+        var expectedAction = _.extend({}, _.findWhere(this.actions, {id: 3}), {
+            context: {},
+        });
+        var actionManager = createActionManager({
+            actions: this.actions,
+            archs: this.archs,
+            data: this.data,
+            services: [SessionStorageService.extend({
+                setItem: function (key, value) {
+                    assert.strictEqual(value, JSON.stringify(expectedAction),
+                        "should store the executed action in the sessionStorage");
+                },
+            })],
+        });
+
+        actionManager.doAction(3);
+
+        actionManager.destroy();
+    });
+
+    QUnit.test("store evaluated context of current action in session_storage", function (assert) {
+        // this test ensures that we don't store stringified instances of
+        // CompoundContext in the session_storage, as they would be meaningless
+        // once restored
+        assert.expect(1);
+
+        var expectedAction = _.extend({}, _.findWhere(this.actions, {id: 4}), {
+            context: {
+                active_model: 'partner',
+                active_id: 1,
+                active_ids: [1],
+            },
+        });
+        var checkSessionStorage = false;
+        var actionManager = createActionManager({
+            actions: this.actions,
+            archs: this.archs,
+            data: this.data,
+            services: [SessionStorageService.extend({
+                setItem: function (key, value) {
+                    if (checkSessionStorage) {
+                        assert.strictEqual(value, JSON.stringify(expectedAction),
+                            "should correctly store the executed action in the sessionStorage");
+                    }
+                },
+            })],
+        });
+
+        // execute an action and open a record in form view
+        actionManager.doAction(3);
+        actionManager.$('.o_list_view .o_data_row:first').click();
+
+        // click on 'Execute action' button (it executes an action with a CompoundContext as context)
+        checkSessionStorage = true;
+        actionManager.$('.o_form_view button:contains(Execute action)').click();
+
+        actionManager.destroy();
+    });
+
     QUnit.module('Actions in target="new"');
 
     QUnit.test('can execute act_window actions in target="new"', function (assert) {
@@ -2847,7 +3050,7 @@ QUnit.module('ActionManager', {
         assert.strictEqual($('.o_technical_modal .o_form_view').length, 1,
             "should have rendered a form view in a modal");
         assert.ok($('.o_technical_modal .modal-body').hasClass('o_act_window'),
-            "modal-body element should have classname 'o_act_window'");
+            "dialog main element should have classname 'o_act_window'");
         assert.ok($('.o_technical_modal .o_form_view').hasClass('o_form_editable'),
             "form view should be in edit mode");
 
@@ -2856,6 +3059,31 @@ QUnit.module('ActionManager', {
             'load_views',
             'default_get',
         ]);
+
+        actionManager.destroy();
+    });
+
+    QUnit.test('chained action on_close', function (assert) {
+        assert.expect(3);
+
+        function on_close() {
+            assert.step('Close Action');
+        };
+
+        var actionManager = createActionManager({
+            actions: this.actions,
+            archs: this.archs,
+            data: this.data,
+        });
+        actionManager.doAction(5, {on_close: on_close});
+
+        // a target=new action shouldn't activate the on_close
+        actionManager.doAction(5);
+        assert.verifySteps([]);
+
+        // An act_window_close should trigger the on_close
+        actionManager.doAction(10);
+        assert.verifySteps(['Close Action']);
 
         actionManager.destroy();
     });
@@ -3066,6 +3294,30 @@ QUnit.module('ActionManager', {
         });
     });
 
+    QUnit.test('close action with provided infos', function (assert) {
+        assert.expect(1);
+
+        var actionManager = createActionManager({
+            actions: this.actions,
+            archs: this.archs,
+            data: this.data,
+        });
+
+        var options = {
+            on_close: function (infos) {
+                assert.strictEqual(infos, 'just for testing',
+                    "should have the correct close infos");
+            }
+        };
+
+        actionManager.doAction({
+            type: 'ir.actions.act_window_close',
+            infos: 'just for testing',
+        }, options);
+
+        actionManager.destroy();
+    });
+
     QUnit.test('properly drop client actions after new action is initiated', function (assert) {
         assert.expect(1);
 
@@ -3094,6 +3346,172 @@ QUnit.module('ActionManager', {
         delete core.action_registry.map.slowAction;
     });
 
+
+    QUnit.test('abstract action does not crash on navigation_moves', function (assert) {
+        assert.expect(1);
+        var ClientAction = AbstractAction.extend({
+        });
+        core.action_registry.add('ClientAction', ClientAction);
+        var actionManager = createActionManager({
+            actions: this.actions,
+            archs: this.archs,
+            data: this.data,
+        });
+        actionManager.doAction('ClientAction');
+        actionManager.trigger_up('navigation_move', {direction:'down'});
+
+        assert.ok(true); // no error so it's good
+        actionManager.destroy();
+        delete core.action_registry.ClientAction;
+    });
+
+    QUnit.test('fields in abstract action does not crash on navigation_moves', function (assert) {
+        assert.expect(1);
+        var self = this;
+
+        // create a client action with 2 input field
+        var inputWidget;
+        var secondInputWidget;
+        var ClientAction = AbstractAction.extend(StandaloneFieldManagerMixin, {
+            init: function () {
+                this._super.apply(this, arguments);
+                StandaloneFieldManagerMixin.init.call(this);
+            },
+            start: function () {
+                var _self = this;
+
+                return this.model.makeRecord('partner', [{
+                    name: 'display_name',
+                    type: 'char',
+                }]).then(function (recordID) {
+                    var record = _self.model.get(recordID);
+                    inputWidget = new BasicFields.InputField(_self, 'display_name', record, {mode: 'edit',});
+                    _self._registerWidget(recordID, 'display_name', inputWidget);
+
+                    secondInputWidget = new BasicFields.InputField(_self, 'display_name', record, {mode: 'edit',});
+                    secondInputWidget.attrs = {className:"secondField"};
+                    _self._registerWidget(recordID, 'display_name', secondInputWidget);
+
+                    inputWidget.appendTo(_self.$el);
+                    secondInputWidget.appendTo(_self.$el);
+                });
+            }
+        });
+        core.action_registry.add('ClientAction', ClientAction);
+        var actionManager = createActionManager({
+            actions: this.actions,
+            archs: this.archs,
+            data: this.data,
+        });
+        actionManager.doAction('ClientAction');
+        inputWidget.$el[0].focus();
+        var event = $.Event('keydown', {
+            which: $.ui.keyCode.TAB,
+            keyCode: $.ui.keyCode.TAB,
+        });
+        $(inputWidget.$el[0]).trigger(event);
+
+        assert.notOk(event.isDefaultPrevented(),
+            "the keyboard event default should not be prevented"); // no crash is good
+        actionManager.destroy();
+        delete core.action_registry.ClientAction;
+    });
+
+    QUnit.test('web client is not deadlocked when a view crashes', function (assert) {
+        assert.expect(3);
+
+        var readOnFirstRecordDef = $.Deferred();
+
+        var actionManager = createActionManager({
+            actions: this.actions,
+            archs: this.archs,
+            data: this.data,
+            mockRPC: function (route, args) {
+                if (args.method === 'read' && args.args[0][0] === 1) {
+                    return readOnFirstRecordDef;
+                }
+                return this._super.apply(this, arguments);
+            }
+        });
+
+        actionManager.doAction(3);
+
+        // open first record in form view. this will crash and will not
+        // display a form view
+        actionManager.$('.o_list_view .o_data_row:first').click();
+
+        readOnFirstRecordDef.reject("not working as intended");
+
+        assert.strictEqual(actionManager.$('.o_list_view').length, 1,
+            "there should still be a list view in dom");
+
+        // open another record, the read will not crash
+        actionManager.$('.o_list_view .o_data_row:eq(2)').click();
+
+        assert.strictEqual(actionManager.$('.o_list_view').length, 0,
+            "there should not be a list view in dom");
+
+        assert.strictEqual(actionManager.$('.o_form_view').length, 1,
+            "there should be a form view in dom");
+
+        actionManager.destroy();
+    });
+
+    QUnit.module('Search View Action');
+
+    QUnit.test('search view should keep focus during do_search', function (assert) {
+        assert.expect(5);
+
+        /* One should be able to type something in the search view, press on enter to
+         * make the facet and trigger the search, then do this process
+         * over and over again seamlessly.
+         * Verifying the input's value is a lot trickier than verifying the search_read
+         * because of how native events are handled in tests
+         */
+
+        var searchDeferred = $.Deferred();
+
+        var actionManager = createActionManager({
+            actions: this.actions,
+            archs: this.archs,
+            data: this.data,
+            mockRPC: function (route, args) {
+                if (route === '/web/dataset/search_read') {
+                    assert.step('search_read ' + args.domain);
+                    if ( _.isEqual(args.domain, [['foo', 'ilike', 'm']])) {
+                        return searchDeferred.then(this._super.bind(this, route, args));
+                    }
+                }
+                return this._super.apply(this, arguments);
+            }
+        });
+
+        actionManager.doAction(3);
+
+        var $searchInput = $('.o_searchview input');
+        $searchInput.trigger($.Event('keypress', {key: 'm', which: 109, keyCode: 109}));
+        $searchInput.trigger($.Event('keydown', {key: 'Enter', which: 13, keyCode: 13}));
+
+        assert.verifySteps(["search_read ",
+                            "search_read foo,ilike,m"]);
+
+        // Triggering the do_search above will kill the current searchview Input
+        $searchInput = $('.o_searchview input');
+        $searchInput.trigger($.Event('keypress', {key: 'o', which: 111, keyCode: 111}));
+
+        // We have something in the input of the search view. Making the search_read
+        // return at this point will trigger the redraw of the view.
+        // However we want to hold on to what we just typed
+        searchDeferred.resolve();
+
+        $searchInput.trigger($.Event('keydown', {key: 'Enter', which: 13, keyCode: 13}));
+
+        assert.verifySteps(["search_read ",
+                            "search_read foo,ilike,m",
+                            "search_read |,foo,ilike,m,foo,ilike,o"]);
+
+        actionManager.destroy();
+    });
 });
 
 });

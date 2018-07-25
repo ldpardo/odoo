@@ -5,16 +5,18 @@ var AbstractAction = require('web.AbstractAction');
 var ControlPanelMixin = require('web.ControlPanelMixin');
 var core = require('web.core');
 var data = require('web.data');
-var pyeval = require('web.pyeval');
+var pyUtils = require('web.py_utils');
 var SearchView = require('web.SearchView');
 
 var _t = core._t;
+var QWeb = core.qweb;
 
 var ProjectPlan = AbstractAction.extend(ControlPanelMixin, {
     events: {
         "click a[type='action']": "_onClickAction",
         "click .o_timesheet_plan_redirect": '_onRedirect',
         "click .oe_stat_button": "_onClickStatButton",
+        "click .o_timesheet_plan_non_billable_task": "_onClickNonBillableTask",
         "click .o_timesheet_plan_sale_timesheet_people_time .progress-bar": '_onClickEmployeeProgressbar',
     },
     /**
@@ -25,6 +27,7 @@ var ProjectPlan = AbstractAction.extend(ControlPanelMixin, {
         this.action = action;
         this.action_manager = parent;
         this.set('title', action.name || _t('Overview'));
+        this.project_ids = [];
     },
     /**
      * @override
@@ -74,7 +77,6 @@ var ProjectPlan = AbstractAction.extend(ControlPanelMixin, {
 
         return $.when(def1, def2).then(function(){
             self.searchview.do_search();
-            self._updateControlPanel();
         });
     },
 
@@ -87,7 +89,7 @@ var ProjectPlan = AbstractAction.extend(ControlPanelMixin, {
      */
     do_show: function () {
         this._super.apply(this, arguments);
-        this._updateControlPanel();
+        this.searchview.do_search();
         this.action_manager.do_push_state({
             action: this.action.id,
             active_id: this.action.context.active_id,
@@ -107,6 +109,7 @@ var ProjectPlan = AbstractAction.extend(ControlPanelMixin, {
     _refreshPlan: function (dom) {
         this.$el.html(dom);
     },
+
     /**
      * Call controller to get the html content
      *
@@ -121,12 +124,22 @@ var ProjectPlan = AbstractAction.extend(ControlPanelMixin, {
             params: {domain: domain},
         }).then(function(result){
             self._refreshPlan(result.html_content);
+            self._updateControlPanel(result.actions);
+            self.project_ids = result.project_ids;
         });
     },
     /**
      * @private
      */
-    _updateControlPanel: function () {
+    _updateControlPanel: function (buttons) {
+        // set actions button
+        if (this.$buttons) {
+            this.$buttons.off().destroy();
+        }
+        var buttons = buttons || [];
+        this.$buttons = $(QWeb.render("project.plan.ControlButtons", {'buttons': buttons}));
+        this.$buttons.on('click', '.o_timesheet_plan_btn_action', this._onClickControlButton.bind(this));
+        // refresh control panel
         this.update_control_panel({
             cp_content: {
                 $buttons: this.$buttons,
@@ -192,6 +205,21 @@ var ProjectPlan = AbstractAction.extend(ControlPanelMixin, {
         });
     },
     /**
+     * Call the action of the action button from control panel, based on the data attribute on the button DOM
+     *
+     * @param {MouseEvent} event
+     * @private
+     */
+    _onClickControlButton: function (ev) {
+        var $target = $(ev.target);
+        var action_id = $target.data('action-id');
+        var context = $target.data('context');
+
+        return this.do_action(action_id, {
+            'additional_context': context,
+        });
+    },
+    /**
      * @private
      * @param {MouseEvent} event
      */
@@ -228,6 +256,22 @@ var ProjectPlan = AbstractAction.extend(ControlPanelMixin, {
      * @private
      * @param {MouseEvent} event
      */
+    _onClickNonBillableTask: function (event) {
+        var self = this;
+        this.do_action({
+            name: _t('Non Billable Tasks'),
+            type: 'ir.actions.act_window',
+            view_type: 'form',
+            view_mode: 'form',
+            res_model: 'project.task',
+            views: [[false, 'list'], [false, 'form']],
+            domain: [['project_id', 'in', this.project_ids || []], ['sale_line_id', '=', false]]
+        });
+    },
+    /**
+     * @private
+     * @param {MouseEvent} event
+     */
     _onRedirect: function (event) {
         event.preventDefault();
         var $target = $(event.target);
@@ -253,7 +297,7 @@ var ProjectPlan = AbstractAction.extend(ControlPanelMixin, {
         event.stopPropagation();
         var session = this.getSession();
         // group by are disabled, so we don't take care of them
-        var result = pyeval.eval_domains_and_contexts({
+        var result = pyUtils.eval_domains_and_contexts({
             domains: event.data.domains,
             contexts: [session.user_context].concat(event.data.contexts)
         });

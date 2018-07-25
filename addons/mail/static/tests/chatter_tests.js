@@ -1,19 +1,13 @@
 odoo.define('mail.chatter_tests', function (require) {
 "use strict";
 
-var Composers = require('mail.composer');
-var ChatManager = require('mail.ChatManager');
 var mailTestUtils = require('mail.testUtils');
 
-var Bus = require('web.Bus');
 var concurrency = require('web.concurrency');
 var FormView = require('web.FormView');
 var KanbanView = require('web.KanbanView');
 var testUtils = require('web.test_utils');
 
-var BasicComposer = Composers.BasicComposer;
-
-var createBusService = mailTestUtils.createBusService;
 var createAsyncView = testUtils.createAsyncView;
 var createView = testUtils.createView;
 
@@ -21,7 +15,13 @@ QUnit.module('mail', {}, function () {
 
 QUnit.module('Chatter', {
     beforeEach: function () {
-        this.services = [ChatManager, createBusService()];
+        // patch _.debounce and _.throttle to be fast and synchronous
+        this.underscoreDebounce = _.debounce;
+        this.underscoreThrottle = _.throttle;
+        _.debounce = _.identity;
+        _.throttle = _.identity;
+
+        this.services = mailTestUtils.getMailServices();
         this.data = {
             partner: {
                 fields: {
@@ -64,6 +64,7 @@ QUnit.module('Chatter', {
                 fields: {
                     activity_type_id: { string: "Activity type", type: "many2one", relation: "mail.activity.type" },
                     create_uid: { string: "Assigned to", type: "many2one", relation: 'partner' },
+                    create_user_id: { string: "Creator", type: "many2one", relation: 'partner' },
                     display_name: { string: "Display name", type: "char" },
                     date_deadline: { string: "Due Date", type: "date" },
                     user_id: { string: "Assigned to", type: "many2one", relation: 'partner' },
@@ -82,8 +83,60 @@ QUnit.module('Chatter', {
                     { id: 1, name: "Type 1" },
                     { id: 2, name: "Type 2" },
                 ],
-            }
+            },
+            'mail.message': {
+                fields: {
+                    attachment_ids: {
+                        string: "Attachments",
+                        type: 'many2many',
+                        relation: 'ir.attachment',
+                        default: [],
+                    },
+                    author_id: {
+                        string: "Author",
+                        relation: 'res.partner',
+                    },
+                    body: {
+                        string: "Contents",
+                        type: 'html',
+                    },
+                    date: {
+                        string: "Date",
+                        type: 'datetime',
+                    },
+                    is_note: {
+                        string: "Note",
+                        type: 'boolean',
+                    },
+                    is_discussion: {
+                        string: "Discussion",
+                        type: 'boolean',
+                    },
+                    is_notification: {
+                        string: "Notification",
+                        type: 'boolean',
+                    },
+                    is_starred: {
+                        string: "Starred",
+                        type: 'boolean',
+                    },
+                    model: {
+                        string: "Related Document Model",
+                        type: 'char',
+                    },
+                    res_id: {
+                        string: "Related Document ID",
+                        type: 'integer',
+                    }
+                },
+                records: [],
+            },
         };
+    },
+    afterEach: function () {
+        // unpatch _.debounce and _.throttle
+        _.debounce = this.underscoreDebounce;
+        _.throttle = this.underscoreThrottle;
     }
 });
 
@@ -92,7 +145,6 @@ QUnit.test('basic rendering', function (assert) {
 
     var count = 0;
     var unwanted_read_count = 0;
-    // var msgRpc = 0;
 
     var form = createView({
         View: FormView,
@@ -134,10 +186,8 @@ QUnit.test('basic rendering', function (assert) {
     assert.ok(form.$('.o_mail_thread').length, "there should be a mail thread");
     assert.ok(!form.$('.o_chatter_topbar .o_chatter_button_log_note').length,
         "log note button should not be available");
-    // assert.strictEqual(msgRpc, 1, "should have fetched messages once");
 
     form.$buttons.find('.o_form_button_edit').click();
-    // assert.strictEqual(msgRpc, 1, "should still have fetched messages only once");
     assert.strictEqual(count, 0, "should have done no read_followers rpc as there are no followers");
     assert.strictEqual(unwanted_read_count, 0, "followers should only be fetched with read_followers route");
     form.destroy();
@@ -200,7 +250,7 @@ QUnit.test('chatter in create mode', function (assert) {
 
     // check if chatter buttons still work
     form.$('.o_chatter_button_new_message').click();
-    assert.strictEqual(form.$('.o_chat_composer:visible').length, 1,
+    assert.strictEqual(form.$('.o_thread_composer:visible').length, 1,
         "chatter should be opened");
 
     form.destroy();
@@ -253,7 +303,7 @@ QUnit.test('chatter rendering inside the sheet', function (assert) {
 
     // check if chatter buttons still work
     form.$('.o_chatter_button_new_message').click();
-    assert.strictEqual(form.$('.o_chat_composer:visible').length, 1,
+    assert.strictEqual(form.$('.o_thread_composer:visible').length, 1,
         "chatter should be opened");
 
     form.destroy();
@@ -306,6 +356,7 @@ QUnit.test('kanban activity widget with an activity', function (assert) {
         date_deadline: moment().format("YYYY-MM-DD"), // now
         state: "today",
         user_id: 2,
+        create_user_id: 2,
         activity_type_id: 1,
     }];
     var rpcCount = 0;
@@ -368,24 +419,15 @@ QUnit.test('kanban activity widget with an activity', function (assert) {
 
 QUnit.test('chatter: post, receive and star messages', function (assert) {
     var done = assert.async();
-    assert.expect(28);
-    
-    var unpatchWindowGetSelection = testUtils.patchWindowGetSelection();
+    assert.expect(27);
 
-    var bus = new Bus();
-    var BusService = createBusService(bus);
-
-    // Remove the mention throttle to speed up the test
-    var mentionThrottle = BasicComposer.prototype.MENTION_THROTTLE;
-    BasicComposer.prototype.MENTION_THROTTLE = 1;
+    var bus = this.services[1].prototype.bus;
 
     this.data.partner.records[0].message_ids = [1];
-    var messages = [{
-        attachment_ids: [],
+    this.data['mail.message'].records = [{
         author_id: ["1", "John Doe"],
         body: "A message",
         date: "2016-12-20 09:35:40",
-        displayed_author: "John Doe",
         id: 1,
         is_note: false,
         is_discussion: true,
@@ -394,12 +436,13 @@ QUnit.test('chatter: post, receive and star messages', function (assert) {
         model: 'partner',
         res_id: 2,
     }];
+
     var getSuggestionsDef = $.Deferred();
     var form = createView({
         View: FormView,
         model: 'partner',
         data: this.data,
-        services: [ChatManager, BusService],
+        services: this.services,
         arch: '<form string="Partners">' +
                 '<sheet>' +
                     '<field name="foo"/>' +
@@ -410,12 +453,6 @@ QUnit.test('chatter: post, receive and star messages', function (assert) {
             '</form>',
         res_id: 2,
         mockRPC: function (route, args) {
-            if (args.method === 'message_format') {
-                var requested_msgs = _.filter(messages, function (msg) {
-                    return _.contains(args.args[0], msg.id);
-                });
-                return $.when(requested_msgs);
-            }
             if (args.method === 'message_get_suggested_recipients') {
                 return $.when({2: []});
             }
@@ -424,14 +461,16 @@ QUnit.test('chatter: post, receive and star messages', function (assert) {
                 return $.when([{email: "test@odoo.com", id: 1, name: "Test User"}]);
             }
             if (args.method === 'message_post') {
-                var msg_id = messages[messages.length-1].id + 1;
-                messages.push({
+                var lastMessageData = _.max(this.data['mail.message'].records, function (messageData) {
+                    return messageData.id;
+                });
+                var messageID = lastMessageData.id + 1;
+                this.data['mail.message'].records.push({
                     attachment_ids: args.kwargs.attachment_ids,
                     author_id: ["42", "Me"],
                     body: args.kwargs.body,
                     date: "2016-12-20 10:35:40",
-                    displayed_author: "Me",
-                    id: msg_id,
+                    id: messageID,
                     is_note: args.kwargs.subtype === 'mail.mt_note',
                     is_discussion: args.kwargs.subtype === 'mail.mt_comment',
                     is_notification: false,
@@ -439,18 +478,21 @@ QUnit.test('chatter: post, receive and star messages', function (assert) {
                     model: 'partner',
                     res_id: 2,
                 });
-                return $.when(msg_id);
+                return $.when(messageID);
             }
             if (args.method === 'toggle_message_starred') {
                 assert.ok(_.contains(args.args[0], 2),
                     "toggle_star_status should have been triggered for message 2 (twice)");
-                var msg = _.findWhere(messages, {id: args.args[0][0]});
-                msg.is_starred = !msg.is_starred;
-                // simulate notification received by chat_manager from longpoll
+                var messageData = _.findWhere(
+                    this.data['mail.message'].records,
+                    { id: args.args[0][0] }
+                );
+                messageData.is_starred = !messageData.is_starred;
+                // simulate notification received by mail_service from longpoll
                 var data = {
                     info: false,
-                    message_ids: [msg.id],
-                    starred: msg.is_starred,
+                    message_ids: [messageData.id],
+                    starred: messageData.is_starred,
                     type: 'toggle_star',
                 };
                 var notification = [[false, 'res.partner'], data];
@@ -474,10 +516,10 @@ QUnit.test('chatter: post, receive and star messages', function (assert) {
 
     // send a message
     form.$('.o_chatter_button_new_message').click();
-    assert.ok(!$('.oe_chatter .o_chat_composer').hasClass('o_hidden'), "chatter should be opened");
-    form.$('.oe_chatter .o_composer_text_field:first()').text("My first message");
+    assert.ok(!$('.oe_chatter .o_thread_composer').hasClass('o_hidden'), "chatter should be opened");
+    form.$('.oe_chatter .o_composer_text_field:first()').val("My first message");
     form.$('.oe_chatter .o_composer_button_send').click();
-    assert.ok($('.oe_chatter .o_chat_composer').hasClass('o_hidden'), "chatter should be closed");
+    assert.ok($('.oe_chatter .o_thread_composer').hasClass('o_hidden'), "chatter should be closed");
     assert.strictEqual(form.$('.o_thread_message').length, 2, "thread should contain two messages");
     assert.ok(form.$('.o_thread_message:first().o_mail_discussion').length,
         "the last message should be a discussion");
@@ -488,10 +530,10 @@ QUnit.test('chatter: post, receive and star messages', function (assert) {
 
     // log a note
     form.$('.o_chatter_button_log_note').click();
-    assert.ok(!$('.oe_chatter .o_chat_composer').hasClass('o_hidden'), "chatter should be opened");
-    form.$('.oe_chatter .o_composer_text_field:first()').text("My first note");
+    assert.ok(!$('.oe_chatter .o_thread_composer').hasClass('o_hidden'), "chatter should be opened");
+    form.$('.oe_chatter .o_composer_text_field:first()').val("My first note");
     form.$('.oe_chatter .o_composer_button_send').click();
-    assert.ok($('.oe_chatter .o_chat_composer').hasClass('o_hidden'), "chatter should be closed");
+    assert.ok($('.oe_chatter .o_thread_composer').hasClass('o_hidden'), "chatter should be closed");
     assert.strictEqual(form.$('.o_thread_message').length, 3, "thread should contain three messages");
     assert.ok(!form.$('.o_thread_message:first().o_mail_discussion').length,
         "the last message should not be a discussion");
@@ -515,7 +557,10 @@ QUnit.test('chatter: post, receive and star messages', function (assert) {
     // very basic test of mention
     form.$('.o_chatter_button_new_message').click();
     var $input = form.$('.oe_chatter .o_composer_text_field:first()');
-    $input.text('@');
+    $input.val('@');
+    // the cursor position must be set for the mention manager to detect that we are mentionning
+    $input[0].selectionStart = 1;
+    $input[0].selectionEnd = 1;
     $input.trigger('keyup');
 
     assert.strictEqual(getSuggestionsDef.state(), "pending",
@@ -533,14 +578,8 @@ QUnit.test('chatter: post, receive and star messages', function (assert) {
             assert.strictEqual(form.$('.o_mention_proposition .o_mention_info').text(), '(test@odoo.com)',
                 "suggestion should be displayed correctly");
 
-            $(".o_mention_proposition > a").trigger("click");
-            assert.strictEqual($(".o_composer_input a").length, 1, "mention is 'green' in edit mode");
-
-            BasicComposer.prototype.MENTION_THROTTLE = mentionThrottle;
-
             //cleanup
             form.destroy();
-            unpatchWindowGetSelection();
             done();
         });
 });
@@ -548,7 +587,6 @@ QUnit.test('chatter: post, receive and star messages', function (assert) {
 QUnit.test('chatter: post a message and switch in edit mode', function (assert) {
     assert.expect(5);
 
-    var messages = [];
     var form = createView({
         View: FormView,
         model: 'partner',
@@ -565,22 +603,15 @@ QUnit.test('chatter: post a message and switch in edit mode', function (assert) 
         res_id: 2,
         session: {},
         mockRPC: function (route, args) {
-            if (args.method === 'message_format') {
-                var requested_msgs = _.filter(messages, function (msg) {
-                    return _.contains(args.args[0], msg.id);
-                });
-                return $.when(requested_msgs);
-            }
             if (args.method === 'message_get_suggested_recipients') {
                 return $.when({2: []});
             }
             if (args.method === 'message_post') {
-                messages.push({
+                this.data['mail.message'].records.push({
                     attachment_ids: args.kwargs.attachment_ids,
                     author_id: ["42", "Me"],
                     body: args.kwargs.body,
                     date: "2016-12-20 10:35:40",
-                    displayed_author: "Me",
                     id: 42,
                     is_note: args.kwargs.subtype === 'mail.mt_note',
                     is_discussion: args.kwargs.subtype === 'mail.mt_comment',
@@ -599,7 +630,7 @@ QUnit.test('chatter: post a message and switch in edit mode', function (assert) 
 
     // send a message
     form.$('.o_chatter_button_new_message').click();
-    form.$('.oe_chatter .o_composer_text_field:first()').text("My first message");
+    form.$('.oe_chatter .o_composer_text_field:first()').val("My first message");
     form.$('.oe_chatter .o_composer_button_send').click();
     assert.strictEqual(form.$('.o_thread_message').length, 1, "thread should contain a message");
     assert.ok(form.$('.o_thread_message:first() .o_thread_message_core').text().indexOf('My first message') >= 0,
@@ -614,10 +645,289 @@ QUnit.test('chatter: post a message and switch in edit mode', function (assert) 
     form.destroy();
 });
 
+QUnit.test('chatter: discard changes on message post with post_refresh "always"', function (assert) {
+    // After posting a message that always reloads the record, if the record
+    // is dirty (= has some unsaved changes), we should warn the user that
+    // these changes will be lost if he proceeds.
+    assert.expect(2);
+
+    var form = createView({
+        View: FormView,
+        model: 'partner',
+        data: this.data,
+        services: this.services,
+        arch: '<form string="Partners">' +
+                '<sheet>' +
+                    '<field name="foo"/>' +
+                '</sheet>' +
+                '<div class="oe_chatter">' +
+                    '<field name="message_ids" widget="mail_thread"' +
+                        ' options="{\'display_log_button\': True, \'post_refresh\': \'always\'}"/>' +
+                '</div>' +
+            '</form>',
+        res_id: 2,
+        session: {},
+        mockRPC: function (route, args) {
+            if (route === "/web/dataset/call_kw/partner/message_get_suggested_recipients") {
+                return $.when({2: []});
+            }
+            return this._super(route, args);
+        },
+        viewOptions: {
+            mode: 'edit',
+        },
+    });
+
+    // Make record dirty
+    form.$('.o_form_sheet input').val('trululu').trigger('input');
+
+    // Send a message
+    form.$('.o_chatter_button_new_message').click();
+    form.$('.oe_chatter .o_composer_text_field:first()').val("My first message");
+    form.$('.oe_chatter .o_composer_button_send').click();
+
+    var $modal = $('.modal-dialog');
+    assert.strictEqual($modal.length, 1, "should have a modal opened");
+    assert.strictEqual($modal.find('.modal-body').text(),
+        "The record has been modified, your changes will be discarded. Do you want to proceed?",
+        "should warn the user that any unsaved changes will be lost");
+
+    form.destroy();
+});
+
+QUnit.test('chatter: discard changes on message post without post_refresh', function (assert) {
+    // After posting a message, if the record is dirty and there are no
+    // post_refresh rule, it will not discard the changes on the record.
+    assert.expect(2);
+
+    var hasDiscardChanges = false; // set if `discard_changes` has been triggered up
+    var messages = [];
+    var form = createView({
+        View: FormView,
+        model: 'partner',
+        data: this.data,
+        services: this.services,
+        arch: '<form string="Partners">' +
+                '<sheet>' +
+                    '<field name="foo"/>' +
+                '</sheet>' +
+                '<div class="oe_chatter">' +
+                    '<field name="message_ids" widget="mail_thread"' +
+                        ' options="{\'display_log_button\': True}"/>' +
+                '</div>' +
+            '</form>',
+        res_id: 2,
+        session: {},
+        mockRPC: function (route, args) {
+            if (route === "/web/dataset/call_kw/partner/message_get_suggested_recipients") {
+                return $.when({2: []});
+            }
+            if (args.method === 'message_format') {
+                var requested_msgs = _.filter(messages, function (msg) {
+                    return _.contains(args.args[0], msg.id);
+                });
+                return $.when(requested_msgs);
+            }
+            if (args.method === 'message_post') {
+                messages.push({
+                    attachment_ids: [],
+                    author_id: ["42", "Me"],
+                    body: args.kwargs.body,
+                    date: moment().format('YYYY-MM-DD HH:MM:SS'), // now
+                    displayed_author: "Me",
+                    id: 42,
+                    is_note: args.kwargs.subtype === 'mail.mt_note',
+                    is_starred: false,
+                    model: 'partner',
+                    res_id: 2,
+                });
+                return $.when(42);
+            }
+            return this._super(route, args);
+        },
+        intercepts: {
+            discard_changes: function () {
+                hasDiscardChanges = true; // should not do that
+            },
+        },
+        viewOptions: {
+            mode: 'edit',
+        },
+    });
+
+    // Make record dirty
+    form.$('.o_form_sheet input').val('trululu').trigger('input');
+
+    // Send a message
+    form.$('.o_chatter_button_new_message').click();
+    form.$('.oe_chatter .o_composer_text_field:first()').val("My first message");
+    form.$('.oe_chatter .o_composer_button_send').click();
+
+    var $modal = $('.modal-dialog');
+    assert.strictEqual($modal.length, 0, "should have no modal opened");
+    assert.notOk(hasDiscardChanges);
+
+    form.destroy();
+});
+
+QUnit.test('chatter: discard changes on message post with post_refresh "recipients"', function (assert) {
+    // After posting a message with mentions, the record will be reloaded,
+    // as the rpc `message_post` may make changes on some fields of the record.
+    // If the record is dirty (= has some unsaved changes), we should warn the
+    // user that these changes will be lost if he proceeds.
+    assert.expect(2);
+    var done = assert.async();
+
+    var getSuggestionsDef = $.Deferred();
+
+    var messages = [];
+    var bus = this.services[1].prototype.bus;
+    var form = createView({
+        View: FormView,
+        model: 'partner',
+        data: this.data,
+        services: this.services,
+        arch: '<form string="Partners">' +
+                '<sheet>' +
+                    '<field name="foo"/>' +
+                '</sheet>' +
+                '<div class="oe_chatter">' +
+                    '<field name="message_ids" widget="mail_thread"' +
+                        ' options="{\'display_log_button\': True, \'post_refresh\': \'recipients\'}"/>' +
+                '</div>' +
+            '</form>',
+        res_id: 2,
+        session: {},
+        mockRPC: function (route, args) {
+            if (route === "/web/dataset/call_kw/partner/message_get_suggested_recipients") {
+                return $.when({2: [[42, "Me"]]});
+            }
+            if (args.method === 'get_mention_suggestions') {
+                getSuggestionsDef.resolve();
+                return $.when([{email: "me@odoo.com", id: 42, name: "Me"}]);
+            }
+            if (args.method === 'message_format') {
+                var requested_msgs = _.filter(messages, function (msg) {
+                    return _.contains(args.args[0], msg.id);
+                });
+                return $.when(requested_msgs);
+            }
+            if (args.method === 'message_post') {
+                messages.push({
+                    attachment_ids: [],
+                    author_id: ["42", "Me"],
+                    body: args.kwargs.body,
+                    date: moment().format('YYYY-MM-DD HH:MM:SS'), // now
+                    displayed_author: "Me",
+                    id: 42,
+                    is_note: args.kwargs.subtype === 'mail.mt_note',
+                    is_starred: false,
+                    model: 'partner',
+                    res_id: 2,
+                });
+                return $.when(42);
+            }
+            return this._super(route, args);
+        },
+        viewOptions: {
+            mode: 'edit',
+        },
+    });
+
+    // Make record dirty
+    form.$('.o_form_sheet input').val('trululu').trigger('input');
+
+    // create a new message
+    form.$('.o_chatter_button_new_message').click();
+
+    // Add a user as mention
+    form.$('.oe_chatter .o_composer_text_field:first()').val("@");
+
+    var $input = form.$('.oe_chatter .o_composer_text_field:first()');
+    $input.val('@');
+    // the cursor position must be set for the mention manager to detect that we are mentionning
+    $input[0].selectionStart = 1;
+    $input[0].selectionEnd = 1;
+    $input.trigger('keyup');
+
+    getSuggestionsDef
+        .then(concurrency.delay.bind(concurrency, 0))
+        .then(function () {
+            // click on mention
+            $input.trigger($.Event('keyup', {which: $.ui.keyCode.ENTER}));
+
+            // untick recipient as follower (prompts a res.partner form otherwise)
+            form.$('.o_checkbox input').prop('checked', false);
+
+            // send message
+            form.$('.oe_chatter .o_composer_button_send').click();
+
+            var $modal = $('.modal-dialog');
+            assert.strictEqual($modal.length, 1, "should have a modal opened");
+            assert.strictEqual($modal.find('.modal-body').text(),
+                "The record has been modified, your changes will be discarded. Do you want to proceed?",
+                "should warn the user that any unsaved changes will be lost");
+
+            form.destroy();
+            done();
+        });
+});
+
+QUnit.test('chatter: discard changes on opening full-composer', function (assert) {
+    // When we open the full-composer, any following operations by the user
+    // will reload the record (even closing the full-composer). Therefore,
+    // we should warn the user when we open the full-composer if the record
+    // is dirty (= has some unsaved changes).
+    assert.expect(2);
+
+    var form = createView({
+        View: FormView,
+        model: 'partner',
+        data: this.data,
+        services: this.services,
+        arch: '<form string="Partners">' +
+                '<sheet>' +
+                    '<field name="foo"/>' +
+                '</sheet>' +
+                '<div class="oe_chatter">' +
+                    '<field name="message_ids" widget="mail_thread"' +
+                        ' options="{\'display_log_button\': True,' +
+                        ' \'post_refresh\': \'always\'}"/>' +
+                '</div>' +
+            '</form>',
+        res_id: 2,
+        session: {},
+        mockRPC: function (route, args) {
+            if (route === "/web/dataset/call_kw/partner/message_get_suggested_recipients") {
+                return $.when({2: []});
+            }
+            return this._super(route, args);
+        },
+        viewOptions: {
+            mode: 'edit',
+        },
+    });
+
+    // Make record dirty
+    form.$('.o_form_sheet input').val('trululu').trigger('input');
+
+    // Open full-composer
+    form.$('.o_chatter_button_new_message').click();
+    form.$('.o_composer_button_full_composer').click();
+
+    var $modal = $('.modal-dialog');
+    assert.strictEqual($modal.length, 1, "should have a modal opened");
+    assert.strictEqual($modal.find('.modal-body').text(),
+        "The record has been modified, your changes will be discarded. Do you want to proceed?",
+        "should warn the user that any unsaved changes will be lost");
+
+    form.destroy();
+});
+
 QUnit.test('chatter: Attachment viewer', function (assert) {
     assert.expect(6);
     this.data.partner.records[0].message_ids = [1];
-    var messages = [{
+    this.data['mail.message'].records = [{
         attachment_ids: [{
             filename: 'image1.jpg',
             id:1,
@@ -646,7 +956,6 @@ QUnit.test('chatter: Attachment viewer', function (assert) {
         author_id: ["1", "John Doe"],
         body: "Attachement viewer test",
         date: "2016-12-20 09:35:40",
-        displayed_author: "John Doe",
         id: 1,
         is_note: false,
         is_discussion: true,
@@ -670,12 +979,6 @@ QUnit.test('chatter: Attachment viewer', function (assert) {
             '</form>',
         res_id: 2,
         mockRPC: function (route, args) {
-            if (args.method === 'message_format') {
-                var requested_msgs = _.filter(messages, function (msg) {
-                    return _.contains(args.args[0], msg.id);
-                });
-                return $.when(requested_msgs);
-            }
             if (_.str.contains(route, '/mail/attachment/preview/') ||
                 _.str.contains(route, '/web/static/lib/pdfjs/web/viewer.html')){
                 var canvas = document.createElement('canvas');
@@ -724,6 +1027,7 @@ QUnit.test('form activity widget: read RPCs', function (assert) {
         date_deadline: moment().format("YYYY-MM-DD"), // now
         state: "today",
         user_id: 2,
+        create_user_id: 2,
         activity_type_id: 2,
     }];
 
@@ -808,6 +1112,7 @@ QUnit.test('form activity widget with another x2many field in view', function (a
         date_deadline: moment().format("YYYY-MM-DD"), // now
         state: "today",
         user_id: 2,
+        create_user_id: 2,
         activity_type_id: 2,
     }];
 
@@ -841,6 +1146,7 @@ QUnit.test('form activity widget: schedule next activity', function (assert) {
         date_deadline: moment().format("YYYY-MM-DD"), // now
         state: "today",
         user_id: 2,
+        create_user_id: 2,
         activity_type_id: 2,
     }];
 
@@ -861,9 +1167,6 @@ QUnit.test('form activity widget: schedule next activity', function (assert) {
             '</form>',
         res_id: 2,
         mockRPC: function (route, args) {
-            if (args.method === 'message_format') {
-                return $.when([]);
-            }
             if (route === '/web/dataset/call_kw/mail.activity/action_feedback') {
                 assert.ok(_.isEqual(args.args[0], [1]), "should call 'action_feedback' for id 1");
                 assert.strictEqual(args.kwargs.feedback, 'everything is ok',
@@ -958,7 +1261,6 @@ QUnit.test('form activity widget: mark as done and remove', function (assert) {
     var self = this;
 
     var nbReads = 0;
-    var messages = [];
     this.data.partner.records[0].activity_ids = [1, 2];
     this.data.partner.records[0].activity_state = 'today';
     this.data['mail.activity'].records = [{
@@ -967,6 +1269,7 @@ QUnit.test('form activity widget: mark as done and remove', function (assert) {
         date_deadline: moment().format("YYYY-MM-DD"), // now
         state: "today",
         user_id: 2,
+        create_user_id: 2,
         activity_type_id: 1,
     }, {
         id: 2,
@@ -974,6 +1277,7 @@ QUnit.test('form activity widget: mark as done and remove', function (assert) {
         date_deadline: moment().format("YYYY-MM-DD"), // now
         state: "today",
         user_id: 2,
+        create_user_id: 2,
         activity_type_id: 1,
     }];
 
@@ -993,12 +1297,6 @@ QUnit.test('form activity widget: mark as done and remove', function (assert) {
             '</form>',
         res_id: 2,
         mockRPC: function (route, args) {
-            if (args.method === 'message_format') {
-                var requested_msgs = _.filter(messages, function (msg) {
-                    return _.contains(args.args[0], msg.id);
-                });
-                return $.when(requested_msgs);
-            }
             if (route === '/web/dataset/call_kw/mail.activity/unlink') {
                 assert.ok(_.isEqual(args.args[0], [1]), "should call 'unlink' for id 1");
             } else if (route === '/web/dataset/call_kw/mail.activity/action_feedback') {
@@ -1007,15 +1305,16 @@ QUnit.test('form activity widget: mark as done and remove', function (assert) {
                     "the feedback should be sent correctly");
                 // should generate a message and unlink the activity
                 self.data.partner.records[0].message_ids = [1];
-                messages.push({
+                this.data['mail.message'].records.push({
                     attachment_ids: [],
                     author_id: ["1", "John Doe"],
                     body: "The activity has been done",
                     date: "2016-12-20 09:35:40",
-                    displayed_author: "John Doe",
                     id: 1,
                     is_note: true,
                     is_discussion: false,
+                    model: 'partner',
+                    res_id: 2,
                 });
                 route = '/web/dataset/call_kw/mail.activity/unlink';
                 args.method = 'unlink';
@@ -1300,7 +1599,7 @@ QUnit.test('does not render and crash when destroyed before chat system is ready
     });
 
     form.destroy();
-    // here, the chatManager system is ready, and the chatter can try to render
+    // here, the chat service system is ready, and the chatter can try to render
     // itself. We simply make sure here that no crashes occur (since the form
     // view is destroyed, all rpcs will be dropped, and many other mechanisms
     // relying on events will not work, such as the chat bus)
@@ -1369,9 +1668,9 @@ QUnit.test('fieldmany2many tags email', function (assert) {
     }).then(function (form) {
         // should read it 3 times (1 with the form view, one with the form dialog and one after save)
         assert.verifySteps([[12, 14], [14], [14]]);
-        assert.strictEqual(form.$('.o_field_many2manytags[name="timmy"] span.o_tag_color_0').length, 2,
+        assert.strictEqual(form.$('.o_field_many2manytags[name="timmy"] button.o_tag_color_0').length, 2,
             "two tags should be present");
-        var firstTag = form.$('.o_field_many2manytags[name="timmy"] span.o_tag_color_0').first();
+        var firstTag = form.$('.o_field_many2manytags[name="timmy"] button.o_tag_color_0').first();
         assert.strictEqual(firstTag.find('.o_badge_text').text(), "gold",
             "tag should only show display_name");
         assert.strictEqual(firstTag.find('.o_badge_text').attr('title'), "coucou@petite.perruche",
@@ -1424,7 +1723,7 @@ QUnit.test('fieldmany2many tags email (edition)', function (assert) {
     });
 
     assert.verifySteps([[12]]);
-    assert.strictEqual(form.$('.o_field_many2manytags[name="timmy"] span.o_tag_color_0').length, 1,
+    assert.strictEqual(form.$('.o_field_many2manytags[name="timmy"] button.o_tag_color_0').length, 1,
         "should contain one tag");
 
     // add an other existing tag
@@ -1435,7 +1734,7 @@ QUnit.test('fieldmany2many tags email (edition)', function (assert) {
     assert.strictEqual($('.modal-body.o_act_window').length, 1,
         "there should be one modal opened to edit the empty email");
     assert.strictEqual($('.modal-body.o_act_window input[name="display_name"]').val(), "silver",
-        "the opened modal should be a form view dialog with the partner_type 14");
+        "the opened modal in edit mode should be a form view dialog with the partner_type 14");
     assert.strictEqual($('.modal-body.o_act_window input[name="email"]').length, 1,
         "there should be an email field in the modal");
 
@@ -1443,7 +1742,7 @@ QUnit.test('fieldmany2many tags email (edition)', function (assert) {
     $('.modal-body.o_act_window input[name="email"]').val('coucou@petite.perruche').trigger('input');
     $('.modal-footer .btn-primary').click();
 
-    assert.strictEqual(form.$('.o_field_many2manytags[name="timmy"] span.o_tag_color_0').length, 2,
+    assert.strictEqual(form.$('.o_field_many2manytags[name="timmy"] button.o_tag_color_0').length, 2,
         "should contain the second tag");
     // should have read [14] three times: when opening the dropdown, when opening the modal, and
     // after the save

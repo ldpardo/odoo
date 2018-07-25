@@ -27,6 +27,8 @@ var KanbanColumn = Widget.extend({
         'click .o_kanban_quick_add': '_onAddQuickCreate',
         'click .o_kanban_load_more': '_onLoadMore',
         'click .o_kanban_toggle_fold': '_onToggleFold',
+        'click .o_column_archive_records': '_onArchiveRecords',
+        'click .o_column_unarchive_records': '_onUnarchiveRecords'
     },
     /**
      * @override
@@ -92,7 +94,10 @@ var KanbanColumn = Widget.extend({
         this.$header = this.$('.o_kanban_header');
 
         for (var i = 0; i < this.data_records.length; i++) {
-            this._addRecord(this.data_records[i]);
+            var def = this._addRecord(this.data_records[i]);
+            if (def.state() === 'pending') {
+                defs.push(def);
+            }
         }
         this.$header.find('.o_kanban_header_title').tooltip();
 
@@ -229,18 +234,19 @@ var KanbanColumn = Widget.extend({
      * @param {Object} [options]
      * @param {string} [options.position]
      *        'before' to add at the top, add at the bottom by default
+     * @return {Deferred}
      */
     _addRecord: function (recordState, options) {
         var record = new KanbanRecord(this, recordState, this.record_options);
         this.records.push(record);
         if (options && options.position === 'before') {
-            record.insertAfter(this.quickCreateWidget ? this.quickCreateWidget.$el : this.$header);
+            return record.insertAfter(this.quickCreateWidget ? this.quickCreateWidget.$el : this.$header);
         } else {
             var $load_more = this.$('.o_kanban_load_more');
             if ($load_more.length) {
-                record.insertBefore($load_more);
+                return record.insertBefore($load_more);
             } else {
-                record.appendTo(this.$el);
+                return record.appendTo(this.$el);
             }
         }
     },
@@ -355,6 +361,28 @@ var KanbanColumn = Widget.extend({
             ev.data.callback(record.$el, record.state.data);
         });
     },
+    /**
+     * @private
+     * @param {MouseEvent} event
+     */
+    _onArchiveRecords: function (event) {
+        event.preventDefault();
+        Dialog.confirm(this, _t("Are you sure that you want to archive all the records from this column?"), {
+            confirm_callback: this.trigger_up.bind(this, 'kanban_column_records_toggle_active', {
+                archive: true,
+            }),
+        });
+    },
+    /**
+     * @private
+     * @param {MouseEvent} event
+     */
+    _onUnarchiveRecords: function (event) {
+        event.preventDefault();
+        this.trigger_up('kanban_column_records_toggle_active', {
+            archive: false,
+        });
+    }
 });
 
 return KanbanColumn;

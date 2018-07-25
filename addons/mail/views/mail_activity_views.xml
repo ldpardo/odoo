@@ -21,10 +21,11 @@
                             <field name="res_model_id" groups="base.group_no_one"/>
                             <field name="summary"/>
                             <field name="icon" groups="base.group_no_one"/>
+                            <field name="decoration_type" groups="base.group_no_one"/>
                             <label for="days"/>
                             <div>
                                 <field name="days" class="oe_inline"/>
-                                <span class="oe_inline">days</span>
+                                <span class="oe_inline ml4">days</span>
                             </div>
                         </group>
                         <group>
@@ -55,7 +56,7 @@
                 <field name="sequence" widget="handle"/>
                 <field name="name"/>
                 <field name="summary"/>
-                <field name="days"/>
+                <field name="days" string="Planned in (days)"/>
                 <field name="res_model_id" groups="base.group_no_one"/>
                 <field name="icon" groups="base.group_no_one"/>
             </tree>
@@ -91,11 +92,10 @@
                         <field name="has_recommended_activities"/>
                     </group>
                     <group attrs="{'invisible': [('has_recommended_activities','=',False)]}">
-                        <div>
-                            <p><strong>Recommended Activities</strong></p>
-                            <field name="recommended_activity_type_id" widget="radio"
+                        <div class="o_row">
+                            <strong>Recommended Activities</strong>
+                            <field name="recommended_activity_type_id" widget="selection_badge"
                                 domain="[('previous_type_ids', '=', previous_activity_type_id)]"
-                                options="{'horizontal':true}"
                                 nolabel="1"/>
                         </div>
                     </group>

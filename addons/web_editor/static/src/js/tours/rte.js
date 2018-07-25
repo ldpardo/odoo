@@ -181,7 +181,7 @@ tour.register('rte', {
 }, {
     content: "save link",
     trigger: '.modal-footer > .btn-primary',
-    extra_trigger: 'a#link-preview.btn.btn-success:containsRegex(/^<span [^>]+><\\/span>$/) > span.fa.fa-3x.pull-right',
+    extra_trigger: 'a#link-preview.btn.btn-success span.fa.fa-3x.pull-right',
 }, {
     content: "click on other picture",
     trigger: '#editable_area > section .row > div:last img',

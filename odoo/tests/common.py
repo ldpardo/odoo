@@ -43,6 +43,7 @@ except ImportError:
     import xmlrpclib
 
 import odoo
+import pprint
 from odoo import api
 from odoo.service import security
 
@@ -211,18 +212,78 @@ class BaseCase(TreeCase, MetaCase('DummyCase', (object,), {})):
             yield
             count = self.cr.sql_log_count - count0
             if count > (expected + margin):
-                msg = "Too much query count: user %s: got %d instead of %d (margin %s)"
-                self.fail(msg % (login, count, expected, margin))
+                msg = "Query count beyond margin for user %s: %d > %d"
+                self.fail(msg % (login, count, expected + margin))
             elif count > expected and count <= (expected + margin):
                 logger = logging.getLogger(type(self).__module__)
-                msg = "Query count greater but still in margin : user %s: got %d instead of %d (margin %s)"
-                logger.warn(msg, login, count, expected, margin)
+                msg = "Query count within margin for user %s: %d > %d (margin %s)"
+                logger.info(msg, login, count, expected, margin)
             elif count < expected:
                 logger = logging.getLogger(type(self).__module__)
-                msg = "Better query count: user %s: got %d instead of %d (margin %s)"
-                logger.info(msg, login, count, expected, margin)
+                msg = "Query count less than expected for user %s: %d < %d"
+                logger.info(msg, login, count, expected)
         else:
             yield
+
+    def assertRecordValues(self, records, expected_values):
+        ''' Compare a recordset with a list of dictionaries representing the expected results.
+        This method performs a comparison element by element based on their index.
+        Then, the order of the expected values is extremely important.
+
+        Note that:
+          - Comparison between falsy values is supported: False match with None.
+          - Comparison between monetary field is also treated according the currency's rounding.
+          - Comparison between x2many field is done by ids. Then, empty expected ids must be [].
+          - Comparison between many2one field id done by id. Empty comparison can be done using any falsy value.
+
+        :param records:               The records to compare.
+        :param expected_values:       List of dicts expected to be exactly matched in records
+        '''
+
+        def _compare_candidate(record, candidate):
+            ''' Return True if the candidate matches the given record '''
+            for field_name in candidate.keys():
+                record_value = record[field_name]
+                candidate_value = candidate[field_name]
+                field_type = record._fields[field_name].type
+                if field_type == 'monetary':
+                    # Compare monetary field.
+                    currency_field_name = record._fields[field_name]._related_currency_field
+                    record_currency = record[currency_field_name]
+                    if record_currency.compare_amounts(candidate_value, record_value)\
+                            if record_currency else candidate_value != record_value:
+                        return False
+                elif field_type in ('one2many', 'many2many'):
+                    # Compare x2many relational fields.
+                    # Empty comparison must be an empty list to be True.
+                    if set(record_value.ids) != set(candidate_value):
+                        return False
+                elif field_type == 'many2one':
+                    # Compare many2one relational fields.
+                    # Every falsy value is allowed to compare with an empty record.
+                    if (record_value or candidate_value) and record_value.id != candidate_value:
+                        return False
+                elif (candidate_value or record_value) and record_value != candidate_value:
+                    # Compare others fields if not both interpreted as falsy values.
+                    return False
+            return True
+
+        def _format_message(records, expected_values):
+            ''' Return a formatted representation of records/expected_values. '''
+            all_records_values = records.read(list(expected_values[0].keys()), load=False)
+            msg1 = '\n'.join(pprint.pformat(dic) for dic in all_records_values)
+            msg2 = '\n'.join(pprint.pformat(dic) for dic in expected_values)
+            return 'Current values:\n\n%s\n\nExpected values:\n\n%s' % (msg1, msg2)
+
+        # if the length or both things to compare is different, we can already tell they're not equal
+        if len(records) != len(expected_values):
+            msg = 'Wrong number of records to compare: %d != %d.\n\n' % (len(records), len(expected_values))
+            self.fail(msg + _format_message(records, expected_values))
+
+        for index, record in enumerate(records):
+            if not _compare_candidate(record, expected_values[index]):
+                msg = 'Record doesn\'t match expected values at index %d.\n\n' % index
+                self.fail(msg + _format_message(records, expected_values))
 
     def shortDescription(self):
         doc = self._testMethodDoc
@@ -367,7 +428,7 @@ class HttpCase(TransactionCase):
         session.db = db
         session.uid = uid
         session.login = user
-        session.session_token = uid and security.compute_session_token(session)
+        session.session_token = uid and security.compute_session_token(session, env)
         session.context = env['res.users'].context_get() or {}
         session.context['uid'] = uid
         session._fix_lang(session.context)
@@ -472,6 +533,8 @@ class HttpCase(TransactionCase):
                 _logger.info("Phantom JS return code: %d" % phantom.returncode)
                 if phantom.returncode == -SIGSEGV:
                     _logger.error("Phantom JS has crashed (segmentation fault) during testing; log may not be relevant")
+                elif phantom.returncode < 0:
+                   _logger.error("Phantom JS probably crashed (Phantom JS return code: %d)" % phantom.returncode)
 
             self._wait_remaining_requests()
 

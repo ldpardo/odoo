@@ -262,7 +262,10 @@ return AbstractModel.extend({
      * @param {Moment} start
      */
     setDate: function (start) {
-        this.data.start_date = this.data.end_date = this.data.target_date = this.data.highlight_date = start;
+        // keep highlight/target_date in localtime
+        this.data.highlight_date = this.data.target_date = start.clone();
+        // set dates in UTC with timezone applied manually
+        this.data.start_date = this.data.end_date = start;
         this.data.start_date.utc().add(this.getSession().getTZOffset(this.data.start_date), 'minutes');
 
         switch (this.data.scale) {
@@ -370,7 +373,9 @@ return AbstractModel.extend({
             domain.push([field, 'in', authorizedValues[field]]);
         }
         for (var field in avoidValues) {
-            domain.push([field, 'not in', avoidValues[field]]);
+            if (avoidValues[field].length > 0) {
+                domain.push([field, 'not in', avoidValues[field]]);
+            }
         }
 
         return domain;
@@ -400,6 +405,7 @@ return AbstractModel.extend({
             dayNames: moment.weekdays(),
             dayNamesShort: moment.weekdaysShort(),
             firstDay: _t.database.parameters.week_start,
+            slotLabelFormat: _t.database.parameters.time_format.search("%H") != -1 ? 'H:mm': 'h(:mm)a',
         };
     },
     /**
@@ -556,6 +562,7 @@ return AbstractModel.extend({
             });
 
             var fs = [];
+            var undefined_fs = [];
             _.each(events, function (event) {
                 var data =  event.record[fieldName];
                 if (!_.contains(['many2many', 'one2many'], field.type)) {
@@ -565,15 +572,18 @@ return AbstractModel.extend({
                 }
                 _.each(data, function (_value) {
                     var value = _.isArray(_value) ? _value[0] : _value;
-                    fs.push({
+                    var f = {
                         'color_index': self.model_color === (field.relation || element.model) ? value : false,
                         'value': value,
-                        'label': fieldUtils.format[field.type](_value, field),
+                        'label': fieldUtils.format[field.type](_value, field) || _t("Undefined"),
                         'avatar_model': field.relation || element.model,
-                    });
+                    };
+                    // if field used as color does not have value then push filter in undefined_fs,
+                    // such filters should come last in filter list with Undefined string, later merge it with fs
+                    value ? fs.push(f) : undefined_fs.push(f);
                 });
             });
-            _.each(fs, function (f) {
+            _.each(_.union(fs, undefined_fs), function (f) {
                 var f1 = _.findWhere(filter.filters, f);
                 if (f1) {
                     f1.display = true;

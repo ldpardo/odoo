@@ -71,12 +71,12 @@ odoo.define('payment.payment_form', function (require) {
                         $(element).trigger("focusout");
                         if (element.dataset.isRequired && element.value.length === 0) {
                                 $(element).closest('div.form-group').addClass('has-error');
-                                $(element).closest('div.form-group').append('<div style="color: red" class="o_invalid_field">' + _.str.escapeHTML("The value is invalid.") + '</div>');
+                                $(element).closest('div.form-group').append('<div style="color: red" class="o_invalid_field" aria-invalid="true">' + _.str.escapeHTML("The value is invalid.") + '</div>');
                                 wrong_input = true;
                         }
                         else if ($(element).closest('div.form-group').hasClass('has-error')) {
                             wrong_input = true;
-                            $(element).closest('div.form-group').append('<div style="color: red" class="o_invalid_field">' + _.str.escapeHTML("The value is invalid.") + '</div>');
+                            $(element).closest('div.form-group').append('<div style="color: red" class="o_invalid_field" aria-invalid="true">' + _.str.escapeHTML("The value is invalid.") + '</div>');
                         }
                     });
 
@@ -153,6 +153,7 @@ odoo.define('payment.payment_form', function (require) {
                             'success_url': self.options.successUrl,
                             'error_url': self.options.errorUrl,
                             'callback_method': self.options.callbackMethod,
+                            'order_id': self.options.orderId,
                         }).then(function (result) {
                             if (result) {
                                 // if the server sent us the html form, we create a form element
@@ -178,7 +179,7 @@ odoo.define('payment.payment_form', function (require) {
                         }).fail(function (message, data) {
                             self.displayError(
                                 _t('Server Error'),
-                                _t("We are not able to redirect you to the payment form.<") +
+                                _t("We are not able to redirect you to the payment form. ") +
                                    data.data.message
                             );
                         });
@@ -221,7 +222,7 @@ odoo.define('payment.payment_form', function (require) {
                 var form_data = this.getFormData(inputs_form);
                 var ds = $('input[name="data_set"]', acquirer_form)[0];
                 var wrong_input = false;
-                
+
                 inputs_form.toArray().forEach(function (element) {
                     //skip the check of non visible inputs
                     if ($(element).attr('type') == 'hidden') {
@@ -233,13 +234,13 @@ odoo.define('payment.payment_form', function (require) {
                     $(element).trigger("focusout");
                     if (element.dataset.isRequired && element.value.length === 0) {
                             $(element).closest('div.form-group').addClass('has-error');
-                            var message = '<div style="color: red" class="o_invalid_field">' + _.str.escapeHTML("The value is invalid.") + '</div>';
+                            var message = '<div style="color: red" class="o_invalid_field" aria-invalid="true">' + _.str.escapeHTML("The value is invalid.") + '</div>';
                             $(element).closest('div.form-group').append(message);
                             wrong_input = true;
                     }
                     else if ($(element).closest('div.form-group').hasClass('has-error')) {
                         wrong_input = true;
-                        var message = '<div style="color: red" class="o_invalid_field">' + _.str.escapeHTML("The value is invalid.") + '</div>';
+                        var message = '<div style="color: red" class="o_invalid_field" aria-invalid="true">' + _.str.escapeHTML("The value is invalid.") + '</div>';
                         $(element).closest('div.form-group').append(message);
                     }
                 });
@@ -397,7 +398,7 @@ odoo.define('payment.payment_form', function (require) {
             var acquirer_id = this.getAcquirerIdFromRadio(checked_radio);
 
             // if we clicked on an add new payment radio, display its form
-            if (this.isNewPaymentRadio(checked_radio)) {                
+            if (this.isNewPaymentRadio(checked_radio)) {
                 this.$('#o_payment_add_token_acq_' + acquirer_id).removeClass('hidden');
             }
             else if (this.isFormPaymentRadio(checked_radio)) {
@@ -415,8 +416,14 @@ odoo.define('payment.payment_form', function (require) {
         },
         displayError: function (title, message) {
             var $checkedRadio = this.$('input[type="radio"]:checked'),
-                acquirerID = this.getAcquirerIdFromRadio($checkedRadio[0]),
+                acquirerID = this.getAcquirerIdFromRadio($checkedRadio[0]);
+            var $acquirerForm;
+            if (this.isNewPaymentRadio($checkedRadio[0])) {
                 $acquirerForm = this.$('#o_payment_add_token_acq_' + acquirerID);
+            }
+            else if (this.isFormPaymentRadio($checkedRadio[0])) {
+                $acquirerForm = this.$('#o_payment_form_acq_' + acquirerID);
+            }
 
             if ($checkedRadio.length === 0) {
                 return new Dialog(null, {

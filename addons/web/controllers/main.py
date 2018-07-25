@@ -28,6 +28,7 @@ import werkzeug.wsgi
 from collections import OrderedDict
 from werkzeug.urls import url_decode, iri_to_uri
 from xml.etree import ElementTree
+import unicodedata
 
 
 import odoo
@@ -177,7 +178,7 @@ def module_installed_bypass_session(dbname):
     return {}
 
 def module_boot(db=None):
-    server_wide_modules = odoo.conf.server_wide_modules or ['web']
+    server_wide_modules = {'base', 'web'} | set(odoo.conf.server_wide_modules)
     serverside = []
     dbside = []
     for i in server_wide_modules:
@@ -961,14 +962,17 @@ class DataSet(http.Controller):
 
 class View(http.Controller):
 
-    @http.route('/web/view/add_custom', type='json', auth="user")
-    def add_custom(self, view_id, arch):
-        CustomView = request.env['ir.ui.view.custom']
-        CustomView.create({
-            'user_id': request.session.uid,
-            'ref_id': view_id,
-            'arch': arch
-        })
+    @http.route('/web/view/edit_custom', type='json', auth="user")
+    def edit_custom(self, custom_id, arch):
+        """
+        Edit a custom view
+
+        :param int custom_id: the id of the edited custom view
+        :param str arch: the edited arch of the custom view
+        :returns: dict with acknowledged operation (result set to True)
+        """
+        custom_view = request.env['ir.ui.view.custom'].browse(custom_id)
+        custom_view.write({ 'arch': arch })
         return {'result': True}
 
 class Binary(http.Controller):
@@ -1043,8 +1047,12 @@ class Binary(http.Controller):
         elif status != 200 and download:
             return request.not_found()
 
-        height = int(height or 0)
-        width = int(width or 0)
+        if headers and dict(headers).get('Content-Type', '') == 'image/svg+xml':  # we shan't resize svg images
+            height = 0
+            width = 0
+        else:
+            height = int(height or 0)
+            width = int(width or 0)
 
         if crop and (width or height):
             content = crop_image(content, type='center', size=(width, height), ratio=(1, 1))
@@ -1107,20 +1115,27 @@ class Binary(http.Controller):
                 </script>"""
         args = []
         for ufile in files:
+
+            filename = ufile.filename
+            if request.httprequest.user_agent.browser == 'safari':
+                # Safari sends NFD UTF-8 (where é is composed by 'e' and [accent])
+                # we need to send it the same stuff, otherwise it'll fail
+                filename = unicodedata.normalize('NFD', ufile.filename)
+
             try:
                 attachment = Model.create({
-                    'name': ufile.filename,
+                    'name': filename,
                     'datas': base64.encodestring(ufile.read()),
-                    'datas_fname': ufile.filename,
+                    'datas_fname': filename,
                     'res_model': model,
                     'res_id': int(id)
                 })
             except Exception:
-                args = args.append({'error': _("Something horrible happened")})
+                args.append({'error': _("Something horrible happened")})
                 _logger.exception("Fail to upload attachment %s" % ufile.filename)
             else:
                 args.append({
-                    'filename': ufile.filename,
+                    'filename': filename,
                     'mimetype': ufile.content_type,
                     'id': attachment.id
                 })
@@ -1223,8 +1238,8 @@ class Export(http.Controller):
         :rtype: [(str, str)]
         """
         return [
-            {'tag': 'csv', 'label': 'CSV'},
             {'tag': 'xls', 'label': 'Excel', 'error': None if xlwt else "XLWT 1.3.0 required"},
+            {'tag': 'csv', 'label': 'CSV'},
         ]
 
     def fields_get(self, model):
@@ -1235,24 +1250,29 @@ class Export(http.Controller):
     @http.route('/web/export/get_fields', type='json', auth="user")
     def get_fields(self, model, prefix='', parent_name= '',
                    import_compat=True, parent_field_type=None,
-                   exclude=None):
+                   parent_field=None, exclude=None):
 
-        if import_compat and parent_field_type == "many2one":
-            fields = {}
+        if import_compat and parent_field_type in ['many2one', 'many2many']:
+            fields = self.fields_get(model)
+            fields = {k: v for k, v in fields.items() if k in ['id', 'name']}
         else:
             fields = self.fields_get(model)
 
-        if import_compat:
-            fields.pop('id', None)
-        else:
+        if not import_compat:
             fields['.id'] = fields.pop('id', {'string': 'ID'})
+        else:
+            fields['id']['string'] = _('External ID')
+
+        if parent_field:
+            parent_field['string'] = _('External ID')
+            fields['id'] = parent_field
 
         fields_sequence = sorted(fields.items(),
-            key=lambda field: odoo.tools.ustr(field[1].get('string', '')))
+            key=lambda field: (field[0] not in ['id', '.id', 'display_name', 'name'], odoo.tools.ustr(field[1].get('string', ''))))
 
         records = []
         for field_name, field in fields_sequence:
-            if import_compat:
+            if import_compat and not field_name == 'id':
                 if exclude and field_name in exclude:
                     continue
                 if field.get('readonly'):
@@ -1264,6 +1284,9 @@ class Export(http.Controller):
                 continue
 
             id = prefix + (prefix and '/'or '') + field_name
+            if field_name == 'name' and import_compat and parent_field_type in ['many2one', 'many2many']:
+                # Add name field when expand m2o and m2m fields in import-compatible mode
+                id = prefix
             name = parent_name + (parent_name and '/' or '') + field['string']
             record = {'id': id, 'string': name,
                       'value': id, 'children': False,
@@ -1275,11 +1298,8 @@ class Export(http.Controller):
             if len(name.split('/')) < 3 and 'relation' in field:
                 ref = field.pop('relation')
                 record['value'] += '/id'
-                record['params'] = {'model': ref, 'prefix': id, 'name': name}
-
-                if not import_compat or field['type'] == 'one2many':
-                    # m2m field in import_compat is childless
-                    record['children'] = True
+                record['params'] = {'model': ref, 'prefix': id, 'name': name, 'parent_field': field}
+                record['children'] = True
 
         return records
 
@@ -1481,6 +1501,8 @@ class ExcelExport(ExportFormat, http.Controller):
 
                 if isinstance(cell_value, pycompat.string_types):
                     cell_value = re.sub("\r", " ", pycompat.to_text(cell_value))
+                    # Excel supports a maximum of 32767 characters in each cell:
+                    cell_value = cell_value[:32767]
                 elif isinstance(cell_value, datetime.datetime):
                     cell_style = datetime_style
                 elif isinstance(cell_value, datetime.date):

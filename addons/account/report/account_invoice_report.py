@@ -15,19 +15,19 @@ class AccountInvoiceReport(models.Model):
     def _compute_amounts_in_user_currency(self):
         """Compute the amounts in the currency of the user
         """
-        context = dict(self._context or {})
         user_currency_id = self.env.user.company_id.currency_id
         currency_rate_id = self.env['res.currency.rate'].search([
             ('rate', '=', 1),
             '|', ('company_id', '=', self.env.user.company_id.id), ('company_id', '=', False)], limit=1)
         base_currency_id = currency_rate_id.currency_id
-        ctx = context.copy()
         for record in self:
-            ctx['date'] = record.date
-            record.user_currency_price_total = base_currency_id.with_context(ctx).compute(record.price_total, user_currency_id)
-            record.user_currency_price_average = base_currency_id.with_context(ctx).compute(record.price_average, user_currency_id)
-            record.user_currency_residual = base_currency_id.with_context(ctx).compute(record.residual, user_currency_id)
+            date = record.date or fields.Date.today()
+            company = record.company_id
+            record.user_currency_price_total = base_currency_id._convert(record.price_total, user_currency_id, company, date)
+            record.user_currency_price_average = base_currency_id._convert(record.price_average, user_currency_id, company, date)
+            record.user_currency_residual = base_currency_id._convert(record.residual, user_currency_id, company, date)
 
+    number = fields.Char('Invoice Number', readonly=True)
     date = fields.Date(readonly=True)
     product_id = fields.Many2one('product.product', string='Product', readonly=True)
     product_qty = fields.Float(string='Product Quantity', readonly=True)
@@ -74,7 +74,7 @@ class AccountInvoiceReport(models.Model):
         'account.invoice': [
             'account_id', 'amount_total_company_signed', 'commercial_partner_id', 'company_id',
             'currency_id', 'date_due', 'date_invoice', 'fiscal_position_id',
-            'journal_id', 'partner_bank_id', 'partner_id', 'payment_term_id',
+            'journal_id', 'number', 'partner_bank_id', 'partner_id', 'payment_term_id',
             'residual', 'state', 'type', 'user_id',
         ],
         'account.invoice.line': [
@@ -90,7 +90,7 @@ class AccountInvoiceReport(models.Model):
 
     def _select(self):
         select_str = """
-            SELECT sub.id, sub.date, sub.product_id, sub.partner_id, sub.country_id, sub.account_analytic_id,
+            SELECT sub.id, sub.number, sub.date, sub.product_id, sub.partner_id, sub.country_id, sub.account_analytic_id,
                 sub.payment_term_id, sub.uom_name, sub.currency_id, sub.journal_id,
                 sub.fiscal_position_id, sub.user_id, sub.company_id, sub.nbr, sub.type, sub.state,
                 sub.categ_id, sub.date_due, sub.account_id, sub.account_line_id, sub.partner_bank_id,
@@ -103,6 +103,7 @@ class AccountInvoiceReport(models.Model):
         select_str = """
                 SELECT ail.id AS id,
                     ai.date_invoice AS date,
+                    ai.number as number,
                     ail.product_id, ai.partner_id, ai.payment_term_id, ail.account_analytic_id,
                     u2.name AS uom_name,
                     ai.currency_id, ai.journal_id, ai.fiscal_position_id, ai.user_id, ai.company_id,
@@ -162,7 +163,7 @@ class AccountInvoiceReport(models.Model):
             WITH currency_rate AS (%s)
             %s
             FROM (
-                %s %s %s
+                %s %s WHERE ail.account_id IS NOT NULL %s
             ) AS sub
             LEFT JOIN currency_rate cr ON
                 (cr.currency_id = sub.currency_id AND
@@ -172,3 +173,17 @@ class AccountInvoiceReport(models.Model):
         )""" % (
                     self._table, self.env['res.currency']._select_companies_rates(),
                     self._select(), self._sub_select(), self._from(), self._group_by()))
+
+
+class ReportInvoiceWithPayment(models.AbstractModel):
+    _name = 'report.account.report_invoice_with_payments'
+
+    @api.model
+    def _get_report_values(self, docids, data=None):
+        report = self.env['ir.actions.report']._get_report_from_name('account.report_invoice_with_payments')
+        return {
+            'doc_ids': docids,
+            'doc_model': report.model,
+            'docs': self.env[report.model].browse(docids),
+            'type_html': data and data.get('report_type') == 'html',
+        }

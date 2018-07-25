@@ -136,8 +136,8 @@ The complete tree should look like
     |       |   `-- <my_module_name>.js
     |       |-- css/
     |       |   `-- <my_module_name>.css
-    |       |-- less/
-    |       |   `-- <my_module_name>.less
+    |       |-- scss/
+    |       |   `-- <my_module_name>.scss
     |       `-- xml/
     |           `-- <my_module_name>.xml
     |-- views/
@@ -222,7 +222,6 @@ Use the following pattern :
   *concerned_group* is the short name of the concerned group ('user'
   for the 'model_name_group_user', 'public' for public user, 'company'
   for multi-company rules, ...).
-* For a group : :samp:`{<model_name>}_group_{<group_name>}` where *group_name* is the name of the group, generally 'user', 'manager', ...
 
 .. code-block:: xml
 
@@ -912,7 +911,7 @@ The convention is to organize the code according to the following structure:
 - *static/src/fonts*
 - *static/src/img*
 - *static/src/js*
-- *static/src/less*: less files
+- *static/src/scss*: scss files
 - *static/src/xml*: all qweb templates that will be rendered in JS
 - *static/tests*: this is where we put all test related files.
 

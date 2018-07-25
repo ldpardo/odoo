@@ -271,7 +271,8 @@ class ProductTemplate(models.Model):
     @api.one
     @api.depends('product_variant_ids.product_tmpl_id')
     def _compute_product_variant_count(self):
-        self.product_variant_count = len(self.product_variant_ids)
+        # do not pollute variants to be prefetched when counting variants
+        self.product_variant_count = len(self.with_prefetch().product_variant_ids)
 
     @api.depends('product_variant_ids', 'product_variant_ids.default_code')
     def _compute_default_code(self):
@@ -300,7 +301,7 @@ class ProductTemplate(models.Model):
     @api.constrains('uom_id', 'uom_po_id')
     def _check_uom(self):
         if any(template.uom_id and template.uom_po_id and template.uom_id.category_id != template.uom_po_id.category_id for template in self):
-            raise ValidationError(_('Error: The default Unit of Measure and the purchase Unit of Measure must be in the same category.'))
+            raise ValidationError(_('The default Unit of Measure and the purchase Unit of Measure must be in the same category.'))
         return True
 
     @api.onchange('uom_id')
@@ -308,30 +309,33 @@ class ProductTemplate(models.Model):
         if self.uom_id:
             self.uom_po_id = self.uom_id.id
 
-    @api.model
-    def create(self, vals):
+    @api.model_create_multi
+    def create(self, vals_list):
         ''' Store the initial standard price in order to be able to retrieve the cost of a product template for a given date'''
         # TDE FIXME: context brol
-        tools.image_resize_images(vals)
-        template = super(ProductTemplate, self).create(vals)
+        for vals in vals_list:
+            tools.image_resize_images(vals)
+        templates = super(ProductTemplate, self).create(vals_list)
         if "create_product_product" not in self._context:
-            template.with_context(create_from_tmpl=True).create_variant_ids()
+            templates.with_context(create_from_tmpl=True).create_variant_ids()
 
         # This is needed to set given values to first variant after creation
-        related_vals = {}
-        if vals.get('barcode'):
-            related_vals['barcode'] = vals['barcode']
-        if vals.get('default_code'):
-            related_vals['default_code'] = vals['default_code']
-        if vals.get('standard_price'):
-            related_vals['standard_price'] = vals['standard_price']
-        if vals.get('volume'):
-            related_vals['volume'] = vals['volume']
-        if vals.get('weight'):
-            related_vals['weight'] = vals['weight']
-        if related_vals:
-            template.write(related_vals)
-        return template
+        for template, vals in pycompat.izip(templates, vals_list):
+            related_vals = {}
+            if vals.get('barcode'):
+                related_vals['barcode'] = vals['barcode']
+            if vals.get('default_code'):
+                related_vals['default_code'] = vals['default_code']
+            if vals.get('standard_price'):
+                related_vals['standard_price'] = vals['standard_price']
+            if vals.get('volume'):
+                related_vals['volume'] = vals['volume']
+            if vals.get('weight'):
+                related_vals['weight'] = vals['weight']
+            if related_vals:
+                template.write(related_vals)
+
+        return templates
 
     @api.multi
     def write(self, vals):
@@ -360,27 +364,27 @@ class ProductTemplate(models.Model):
                 for template in self]
 
     @api.model
-    def name_search(self, name='', args=None, operator='ilike', limit=100):
+    def _name_search(self, name, args=None, operator='ilike', limit=100, name_get_uid=None):
         # Only use the product.product heuristics if there is a search term and the domain
         # does not specify a match on `product.template` IDs.
         if not name or any(term[0] == 'id' for term in (args or [])):
-            return super(ProductTemplate, self).name_search(name=name, args=args, operator=operator, limit=limit)
+            return super(ProductTemplate, self)._name_search(name=name, args=args, operator=operator, limit=limit, name_get_uid=name_get_uid)
 
         Product = self.env['product.product']
         templates = self.browse([])
         while True:
             domain = templates and [('product_tmpl_id', 'not in', templates.ids)] or []
             args = args if args is not None else []
-            products_ns = Product.name_search(name, args+domain, operator=operator)
+            products_ns = Product._name_search(name, args+domain, operator=operator, name_get_uid=name_get_uid)
             products = Product.browse([x[0] for x in products_ns])
             templates |= products.mapped('product_tmpl_id')
             if (not products) or (limit and (len(templates) > limit)):
                 break
 
         # re-apply product.template order + name_get
-        return super(ProductTemplate, self).name_search(
+        return super(ProductTemplate, self)._name_search(
             '', args=[('id', 'in', list(set(templates.ids)))],
-            operator='ilike', limit=limit)
+            operator='ilike', limit=limit, name_get_uid=name_get_uid)
 
     @api.multi
     def price_compute(self, price_type, uom=False, currency=False, company=False):
@@ -397,6 +401,9 @@ class ProductTemplate(models.Model):
             # Thus, in order to compute the sale price from the cost for users not in this group
             # We fetch the standard price as the superuser
             templates = self.with_context(force_company=company and company.id or self._context.get('force_company', self.env.user.company_id.id)).sudo()
+        if not company:
+            company = self._context.get('force_company', self.env.user.company_id.id)
+        date = self.env.context.get('date') or fields.Date.today()
 
         prices = dict.fromkeys(self.ids, 0.0)
         for template in templates:
@@ -408,7 +415,7 @@ class ProductTemplate(models.Model):
             # Convert from current user company currency to asked one
             # This is right cause a field cannot be in more than one currency
             if currency:
-                prices[template.id] = template.currency_id.compute(prices[template.id], currency)
+                prices[template.id] = template.currency_id._convert(prices[template.id], currency, company, date)
 
         return prices
 
@@ -421,6 +428,11 @@ class ProductTemplate(models.Model):
     def create_variant_ids(self):
         Product = self.env["product.product"]
         AttributeValues = self.env['product.attribute.value']
+
+        variants_to_create = []
+        variants_to_activate = []
+        variants_to_unlink = []
+
         for tmpl_id in self.with_context(active_test=False):
             # adding an attribute with only one value should not recreate product
             # write this attribute on every product to make sure we don't lose them
@@ -439,39 +451,37 @@ class ProductTemplate(models.Model):
             existing_variants = {frozenset(variant.attribute_value_ids.filtered(lambda r: r.attribute_id.create_variant).ids) for variant in tmpl_id.product_variant_ids}
             # -> for each value set, create a recordset of values to create a
             #    variant for if the value set isn't already a variant
-            to_create_variants = [
-                value_ids
-                for value_ids in variant_matrix
-                if set(value_ids.ids) not in existing_variants
-            ]
+            for value_ids in variant_matrix:
+                if set(value_ids.ids) not in existing_variants:
+                    variants_to_create.append({
+                        'product_tmpl_id': tmpl_id.id,
+                        'attribute_value_ids': [(6, 0, value_ids.ids)]
+                    })
 
             # check product
-            variants_to_activate = self.env['product.product']
-            variants_to_unlink = self.env['product.product']
             for product_id in tmpl_id.product_variant_ids:
                 if not product_id.active and product_id.attribute_value_ids.filtered(lambda r: r.attribute_id.create_variant) in variant_matrix:
-                    variants_to_activate |= product_id
+                    variants_to_activate.append(product_id)
                 elif product_id.attribute_value_ids.filtered(lambda r: r.attribute_id.create_variant) not in variant_matrix:
-                    variants_to_unlink |= product_id
-            if variants_to_activate:
-                variants_to_activate.write({'active': True})
+                    variants_to_unlink.append(product_id)
 
-            # create new product
-            for variant_ids in to_create_variants:
-                new_variant = Product.create({
-                    'product_tmpl_id': tmpl_id.id,
-                    'attribute_value_ids': [(6, 0, variant_ids.ids)]
-                })
+        if variants_to_activate:
+            Product.concat(*variants_to_activate).write({'active': True})
 
-            # unlink or inactive product
-            for variant in variants_to_unlink:
-                try:
-                    with self._cr.savepoint(), tools.mute_logger('odoo.sql_db'):
-                        variant.unlink()
-                # We catch all kind of exception to be sure that the operation doesn't fail.
-                except (psycopg2.Error, except_orm):
-                    variant.write({'active': False})
-                    pass
+        # create new products
+        if variants_to_create:
+            Product.create(variants_to_create)
+
+        # unlink or inactive product
+        for variant in variants_to_unlink:
+            try:
+                with self._cr.savepoint(), tools.mute_logger('odoo.sql_db'):
+                    variant.unlink()
+            # We catch all kind of exception to be sure that the operation doesn't fail.
+            except (psycopg2.Error, except_orm):
+                variant.write({'active': False})
+                pass
+
         return True
 
     @api.model
@@ -480,3 +490,10 @@ class ProductTemplate(models.Model):
             empty_list_help_document_name=_("product"),
         )
         return super(ProductTemplate, self).get_empty_list_help(help)
+
+    @api.model
+    def get_import_templates(self):
+        return [{
+            'label': _('Import Template for Products'),
+            'template': '/product/static/xls/product_template.xls'
+        }]

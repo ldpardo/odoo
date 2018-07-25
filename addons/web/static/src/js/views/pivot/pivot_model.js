@@ -17,6 +17,7 @@ odoo.define('web.PivotModel', function (require) {
  */
 
 var AbstractModel = require('web.AbstractModel');
+var concurrency = require('web.concurrency');
 var core = require('web.core');
 var session = require('web.session');
 var utils = require('web.utils');
@@ -32,6 +33,7 @@ var PivotModel = AbstractModel.extend({
         this._super.apply(this, arguments);
         this.numbering = {};
         this.data = null;
+        this._loadDataDropPrevious = new concurrency.DropPrevious();
     },
 
     //--------------------------------------------------------------------------
@@ -78,9 +80,6 @@ var PivotModel = AbstractModel.extend({
             var type = self.fields[measure].type;
             return (type === 'many2one') ? measure + ":count_distinct" : measure;
         });
-        var fields = _.map(other_groupbys, function (field) {
-            return field.split(':')[0];
-        });
 
         var groupbys = [];
 
@@ -94,7 +93,7 @@ var PivotModel = AbstractModel.extend({
                     method: 'read_group',
                     context: self.data.context,
                     domain: header.domain.length ? header.domain : self.data.domain,
-                    fields: [].concat(field, fields, measures),
+                    fields: measures,
                     groupBy: groupBy,
                     lazy: false,
                 });
@@ -239,9 +238,12 @@ var PivotModel = AbstractModel.extend({
      * @param {string[]} params.colGroupBys
      * @param {string[]} params.measures
      * @param {Object} params.fields
+     * @param {string} params.default_order
      * @returns {Deferred}
      */
     load: function (params) {
+        var self = this;
+
         this.initialDomain = params.domain;
         this.initialRowGroupBys = params.context.pivot_row_groupby || params.rowGroupBys;
         this.fields = params.fields;
@@ -255,7 +257,13 @@ var PivotModel = AbstractModel.extend({
             sorted_column: {},
         };
         this.defaultGroupedBy = params.groupedBy;
-        return this._loadData();
+
+        return this._loadData().then(function () {
+            if (params.default_order) {
+                var info = params.default_order.split(' ');
+                self.sortRows(self.data.main_col.root.id, info[0], info[1] === 'desc');
+            }
+        });
     },
     /**
      * @override
@@ -270,6 +278,7 @@ var PivotModel = AbstractModel.extend({
             this.data.colGroupBys = params.context.pivot_column_groupby || this.data.colGroupBys;
             this.data.groupedBy = params.context.pivot_row_groupby || this.data.groupedBy;
             this.data.measures = this._processMeasures(params.context.pivot_measures) || this.data.measures;
+            this.defaultGroupedBy = this.data.groupedBy.length ? this.data.groupedBy : this.defaultGroupedBy;
         }
         if ('domain' in params) {
             this.data.domain = params.domain;
@@ -298,7 +307,7 @@ var PivotModel = AbstractModel.extend({
 
             self._updateTree(old_col_root, self.data.main_col.root);
             new_groupby_length = self._getHeaderDepth(self.data.main_col.root) - 1;
-            self.data.main_row.groupbys = old_col_root.groupbys.slice(0, new_groupby_length);
+            self.data.main_row.groupbys = old_row_root.groupbys.slice(0, new_groupby_length);
         });
     },
     /**
@@ -551,9 +560,6 @@ var PivotModel = AbstractModel.extend({
                 return measure;
             }
         });
-        var fields = _.map(rowGroupBys.concat(colGroupBys), function (field) {
-                        return field.split(':')[0];
-                    }).concat(measures);
 
         for (var i = 0; i < rowGroupBys.length + 1; i++) {
             for (var j = 0; j < colGroupBys.length + 1; j++) {
@@ -561,17 +567,17 @@ var PivotModel = AbstractModel.extend({
             }
         }
 
-        return $.when.apply(null, groupBys.map(function (groupBy) {
+        return this._loadDataDropPrevious.add($.when.apply(null, groupBys.map(function (groupBy) {
             return self._rpc({
                     model: self.modelName,
                     method: 'read_group',
                     context: self.data.context,
                     domain: self.data.domain,
-                    fields: fields,
+                    fields: measures,
                     groupBy: groupBy,
                     lazy: false,
                 });
-        })).then(function () {
+        }))).then(function () {
             var data = Array.prototype.slice.call(arguments);
             if (data[0][0].__count === 0) {
                 self.data.has_data = false;

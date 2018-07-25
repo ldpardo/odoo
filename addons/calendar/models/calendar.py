@@ -4,7 +4,7 @@ import base64
 
 import babel.dates
 import collections
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, MAXYEAR
 from dateutil import parser
 from dateutil import rrule
 from dateutil.relativedelta import relativedelta
@@ -17,6 +17,7 @@ import uuid
 
 from odoo import api, fields, models
 from odoo import tools
+from odoo.osv import expression
 from odoo.tools.translate import _
 from odoo.tools import DEFAULT_SERVER_DATE_FORMAT, DEFAULT_SERVER_DATETIME_FORMAT, pycompat
 from odoo.exceptions import UserError, ValidationError
@@ -110,7 +111,7 @@ class Attendee(models.Model):
 
     _name = 'calendar.attendee'
     _rec_name = 'common_name'
-    _description = 'Attendee information'
+    _description = 'Calendar Registration'
 
     def _default_access_token(self):
         return uuid.uuid4().hex
@@ -141,14 +142,15 @@ class Attendee(models.Model):
         """ Make entry on email and availability on change of partner_id field. """
         self.email = self.partner_id.email
 
-    @api.model
-    def create(self, values):
-        if not values.get("email") and values.get("common_name"):
-            common_nameval = values.get("common_name").split(':')
-            email = [x for x in common_nameval if '@' in x] # TODO JEM : should be refactored
-            values['email'] = email and email[0] or ''
-            values['common_name'] = values.get("common_name")
-        return super(Attendee, self).create(values)
+    @api.model_create_multi
+    def create(self, vals_list):
+        for values in vals_list:
+            if not values.get("email") and values.get("common_name"):
+                common_nameval = values.get("common_name").split(':')
+                email = [x for x in common_nameval if '@' in x] # TODO JEM : should be refactored
+                values['email'] = email and email[0] or ''
+                values['common_name'] = values.get("common_name")
+        return super(Attendee, self).create(vals_list)
 
     @api.multi
     @api.returns('self', lambda value: value.id)
@@ -170,7 +172,7 @@ class Attendee(models.Model):
         invitation_template = self.env.ref(template_xmlid)
 
         # get ics file for all meetings
-        ics_files = self.mapped('event_id').get_ics_file()
+        ics_files = self.mapped('event_id')._get_ics_file()
 
         # prepare rendering context for mail template
         colors = {
@@ -194,7 +196,7 @@ class Attendee(models.Model):
             if attendee.email or attendee.partner_id.email:
                 # FIXME: is ics_file text or bytes?
                 ics_file = ics_files.get(attendee.event_id.id)
-                mail_id = invitation_template.send_mail(attendee.id)
+                mail_id = invitation_template.send_mail(attendee.id, notif_layout='mail.mail_notification_light')
 
                 vals = {}
                 if ics_file:
@@ -609,7 +611,8 @@ class Meeting(models.Model):
         if not event_date:
             event_date = datetime.now()
 
-        if self.allday and self.rrule and 'UNTIL' in self.rrule and 'Z' not in self.rrule:
+        use_naive_datetime = self.allday and self.rrule and 'UNTIL' in self.rrule and 'Z' not in self.rrule
+        if use_naive_datetime:
             rset1 = rrule.rrulestr(str(self.rrule), dtstart=event_date.replace(tzinfo=None), forceset=True, ignoretz=True)
         else:
             # Convert the event date to saved timezone (or context tz) as it'll
@@ -618,9 +621,21 @@ class Meeting(models.Model):
             rset1 = rrule.rrulestr(str(self.rrule), dtstart=event_date, forceset=True, tzinfos={})
         recurring_meetings = self.search([('recurrent_id', '=', self.id), '|', ('active', '=', False), ('active', '=', True)])
 
-        for meeting in recurring_meetings:
-            rset1._exdate.append(todate(meeting.recurrent_id_date))
-        return [d.astimezone(pytz.UTC) if d.tzinfo else d for d in rset1]
+        # We handle a maximum of 50,000 meetings at a time, and clear the cache at each step to
+        # control the memory usage.
+        invalidate = False
+        for meetings in self.env.cr.split_for_in_conditions(recurring_meetings, size=50000):
+            if invalidate:
+                self.invalidate_cache()
+            for meeting in meetings:
+                recurring_date = fields.Datetime.from_string(meeting.recurrent_id_date)
+                if use_naive_datetime:
+                    recurring_date = recurring_date.replace(tzinfo=None)
+                else:
+                    recurring_date = todate(meeting.recurrent_id_date)
+                rset1.exdate(recurring_date)
+            invalidate = True
+        return [d.astimezone(pytz.UTC) if d.tzinfo else d for d in rset1 if d.year < MAXYEAR]
 
     @api.multi
     def _get_recurrency_end_date(self):
@@ -643,7 +658,13 @@ class Meeting(models.Model):
             }[data['rrule_type']]
 
             deadline = fields.Datetime.from_string(data['stop'])
-            return deadline + relativedelta(**{delay: count * mult})
+            computed_final_date = False
+            while not computed_final_date and count > 0:
+                try:  # may crash if year > 9999 (in case of recurring events)
+                    computed_final_date = deadline + relativedelta(**{delay: count * mult})
+                except ValueError:
+                    count -= data['interval']
+            return computed_final_date or deadline
         return final_date
 
     @api.multi
@@ -884,8 +905,8 @@ class Meeting(models.Model):
                 startdate = startdate.astimezone(pytz.utc)  # Convert to UTC
                 meeting.start = fields.Datetime.to_string(startdate)
             else:
-                meeting.start = meeting.start_datetime
-                meeting.stop = meeting.stop_datetime
+                meeting.write({'start': meeting.start_datetime,
+                               'stop': meeting.stop_datetime})
 
     @api.depends('byday', 'recurrency', 'final_date', 'rrule_type', 'month_by', 'interval', 'count', 'end_type', 'mo', 'tu', 'we', 'th', 'fr', 'sa', 'su', 'day', 'week_list')
     def _compute_rrule(self):
@@ -911,9 +932,15 @@ class Meeting(models.Model):
     def _check_closing_date(self):
         for meeting in self:
             if meeting.start_datetime and meeting.stop_datetime and meeting.stop_datetime < meeting.start_datetime:
-                raise ValidationError(_('Ending datetime cannot be set before starting datetime.'))
+                raise ValidationError(
+                    _('The ending date and time cannot be earlier than the starting date and time.') + '\n' +
+                    _("Meeting '%s' starts '%s' and ends '%s'") % (meeting.name, meeting.start_datetime, meeting.stop_datetime)
+                )
             if meeting.start_date and meeting.stop_date and meeting.stop_date < meeting.start_date:
-                raise ValidationError(_('Ending date cannot be set before starting date.'))
+                raise ValidationError(
+                    _('The ending date cannot be earlier than the starting date.') + '\n' +
+                    _("Meeting '%s' starts '%s' and ends '%s'") % (meeting.name, meeting.start_date, meeting.stop_date)
+                )
 
     @api.onchange('start_datetime', 'duration')
     def _onchange_duration(self):
@@ -922,12 +949,20 @@ class Meeting(models.Model):
             self.start = self.start_datetime
             self.stop = fields.Datetime.to_string(start + timedelta(hours=self.duration))
 
+    @api.onchange('start_date')
+    def _onchange_start_date(self):
+        self.start = self.start_date
+
+    @api.onchange('stop_date')
+    def _onchange_stop_date(self):
+        self.stop = self.stop_date
+
     ####################################################
     # Calendar Business, Reccurency, ...
     ####################################################
 
     @api.multi
-    def get_ics_file(self):
+    def _get_ics_file(self):
         """ Returns iCalendar file for the event invitation.
             :returns a dict of .ics file content for each meeting
         """
@@ -1073,6 +1108,24 @@ class Meeting(models.Model):
         if 'id' not in order_fields:
             order_fields.append('id')
 
+        leaf_evaluations = None
+        #compose a query of the type SELECT id, condition1 as domain1, condition2 as domaine2
+        #This allows to load leaf interpretation of the where clause in one query
+        #leaf_evaluations is then used when running custom interpretation of domain for recuring events
+        if self:
+            select_fields = ["id"]
+            where_params_list = []
+            for pos, arg in enumerate(domain):
+                if not arg[0] in ('start', 'stop', 'final_date', '&', '|'):
+                    e = expression.expression([arg], self)
+                    where_clause, where_params = e.to_sql()  # CAUTION, wont work if field is autojoin, not supported
+                    select_fields.append("%s as \"%s\"" % (where_clause, str(pos)))
+                    where_params_list += where_params
+            if len(select_fields) > 1:
+                query = "SELECT %s FROM calendar_event WHERE id in %%s" % (", ".join(select_fields))  # could be improved by only taking event with recurency ?
+                where_params_list += [tuple(self.ids)]
+                self._cr.execute(query, where_params_list)
+                leaf_evaluations = dict([(row['id'], row) for row in self._cr.dictfetchall()])
         result_data = []
         result = []
         for meeting in self:
@@ -1090,7 +1143,7 @@ class Meeting(models.Model):
                 pile = []
                 ok = True
                 r_date = r_start_date  # default for empty domain
-                for arg in domain:
+                for pos, arg in enumerate(domain):
                     if str(arg[0]) in ('start', 'stop', 'final_date'):
                         if str(arg[0]) == 'start':
                             r_date = r_start_date
@@ -1115,6 +1168,8 @@ class Meeting(models.Model):
                         pile.append(ok)
                     elif str(arg) == str('&') or str(arg) == str('|'):
                         pile.append(arg)
+                    elif leaf_evaluations and meeting.id in leaf_evaluations:
+                        pile.append(bool(leaf_evaluations[meeting.id][str(pos)]))
                     else:
                         pile.append(True)
                 pile.reverse()
@@ -1142,9 +1197,15 @@ class Meeting(models.Model):
             for key in (order or self._order).split(',')
         ))
         def key(record):
+            # we need to deal with undefined fields, as sorted requires an homogeneous iterable
+            def boolean_product(x):
+                x = False if (isinstance(x, models.Model) and not x) else x
+                if isinstance(x, bool):
+                    return (x, x)
+                return (True, x)
             # first extract the values for each key column (ids need special treatment)
             vals_spec = (
-                (any_id2key(record[name]) if name == 'id' else record[name], desc)
+                (any_id2key(record[name]) if name == 'id' else boolean_product(record[name]), desc)
                 for name, desc in sort_spec
             )
             # then Reverse if the value matches a "desc" column
@@ -1219,7 +1280,12 @@ class Meeting(models.Model):
     def _rrule_parse(self, rule_str, data, date_start):
         day_list = ['mo', 'tu', 'we', 'th', 'fr', 'sa', 'su']
         rrule_type = ['yearly', 'monthly', 'weekly', 'daily']
-        rule = rrule.rrulestr(rule_str, dtstart=fields.Datetime.from_string(date_start))
+        ddate = fields.Datetime.from_string(date_start)
+        if 'Z' in rule_str and not ddate.tzinfo:
+            ddate = ddate.replace(tzinfo=pytz.timezone('UTC'))
+            rule = rrule.rrulestr(rule_str, dtstart=ddate)
+        else:
+            rule = rrule.rrulestr(rule_str, dtstart=ddate)
 
         if rule._freq > 0 and rule._freq < 4:
             data['rrule_type'] = rrule_type[rule._freq]
@@ -1644,7 +1710,7 @@ class Meeting(models.Model):
         return result
 
     @api.model
-    def search(self, args, offset=0, limit=0, order=None, count=False):
+    def _search(self, args, offset=0, limit=None, order=None, count=False, access_rights_uid=None):
         if self._context.get('mymeetings'):
             args += [('partner_ids', 'in', self.env.user.partner_id.ids)]
 
@@ -1659,7 +1725,7 @@ class Meeting(models.Model):
             new_args.append(new_arg)
 
         if not self._context.get('virtual_id', True):
-            return super(Meeting, self).search(new_args, offset=offset, limit=limit, order=order, count=count)
+            return super(Meeting, self)._search(new_args, offset=offset, limit=limit, order=order, count=count, access_rights_uid=access_rights_uid)
 
         if any(arg[0] == 'start' for arg in args) and \
            not any(arg[0] in ('stop', 'final_date') for arg in args):
@@ -1674,13 +1740,14 @@ class Meeting(models.Model):
                 new_args.append(new_arg)
 
         # offset, limit, order and count must be treated separately as we may need to deal with virtual ids
-        events = super(Meeting, self).search(new_args, offset=0, limit=0, order=None, count=False)
+        event_ids = super(Meeting, self)._search(new_args, offset=0, limit=0, order=None, count=False, access_rights_uid=access_rights_uid)
+        events = self.browse(event_ids)
         events = self.browse(events.get_recurrent_ids(args, order=order))
         if count:
             return len(events)
         elif limit:
-            return events[offset: offset + limit]
-        return events
+            return events[offset: offset + limit].ids
+        return events.ids
 
     @api.multi
     @api.returns('self', lambda value: value.id)

@@ -248,7 +248,7 @@ QUnit.module('Views', {
         });
     });
 
-    QUnit.test('getContext correctly returns mode, measure and groupbys', function (assert) {
+    QUnit.test('getContext correctly returns mode, measure, groupbys and interval mapping', function (assert) {
         var done = assert.async();
         assert.expect(4);
 
@@ -265,6 +265,7 @@ QUnit.module('Views', {
                 graph_mode: 'bar',
                 graph_measure: '__count__',
                 graph_groupbys: ['product_id'],
+                graph_intervalMapping: {},
             }, "context should be correct");
 
             graph.$buttons.find('li[data-field="foo"] a').click(); // change measure
@@ -275,6 +276,7 @@ QUnit.module('Views', {
                 graph_mode: 'bar',
                 graph_measure: 'foo',
                 graph_groupbys: ['product_id'],
+                graph_intervalMapping: {},
             }, "context should be correct");
 
             graph.$buttons.find('button[data-mode="line"]').click(); // change mode
@@ -285,6 +287,7 @@ QUnit.module('Views', {
                 graph_mode: 'line',
                 graph_measure: 'foo',
                 graph_groupbys: ['product_id'],
+                graph_intervalMapping: {},
             }, "context should be correct");
 
             graph.update({groupBy: ['product_id', 'color_id']}); // change groupbys
@@ -295,6 +298,7 @@ QUnit.module('Views', {
                 graph_mode: 'line',
                 graph_measure: 'foo',
                 graph_groupbys: ['product_id', 'color_id'],
+                graph_intervalMapping: {},
             }, "context should be correct");
 
             graph.destroy();
@@ -601,6 +605,46 @@ QUnit.module('Views', {
             graph.destroy();
             done();
         });
+    });
+
+    QUnit.test('graph view crash when moving from search view using Down key', function (assert) {
+        assert.expect(1);
+
+        var graph = createView({
+            View: GraphView,
+            model: "foo",
+            data: this.data,
+            arch: '<graph string="Partners" type="pie">' +
+                        '<field name="bar"/>' +
+                '</graph>',
+        });
+        graph.renderer.giveFocus();
+        assert.ok(true,"should not generate any error");
+        graph.destroy();
+    });
+
+    QUnit.test('graph measures should be alphabetically sorted', function (assert) {
+        assert.expect(2);
+
+        var data = this.data;
+        data.foo.fields.bouh = {string: "bouh", type: "integer"};
+
+        var graph = createView({
+            View: GraphView,
+            model: "foo",
+            data: data,
+            arch: '<graph string="Partners">' +
+                        '<field name="foo" type="measure"/>' +
+                        '<field name="bouh" type="measure"/>' +
+                  '</graph>',
+        })
+
+        assert.strictEqual(graph.$buttons.find('.o_graph_measures_list li:first').data('field'), 'bouh',
+            "Bouh should be the first measure");
+        assert.strictEqual(graph.$buttons.find('.o_graph_measures_list li:last').data('field'), '__count__',
+            "Count should be the last measure");
+
+        graph.destroy();
     });
 });
 
